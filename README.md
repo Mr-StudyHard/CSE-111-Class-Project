@@ -43,8 +43,42 @@ DATABASE_URL=sqlite:///app.db
 
 # TMDb (for upcoming ETL)
 TMDB_API_KEY=your_key_here
-
 ```
 `.env` is git-ignored.
 
+## Getting Started (Development) 
 
+0) Prerequisites
+   - Python 3.10+
+   - Node 18+ and npm
+1) Python Environment
+   ```
+   python -m venv .venv
+   # Windows: .venv\Scripts\activate
+   source .venv/bin/activate
+    
+   # install backend deps (or use requirements.txt if present)
+   pip install flask sqlalchemy python-dotenv requests
+   ```
+2) Run the Flask API (port 5000)
+   ```
+   # from repo root
+   # mac/linux:
+   export FLASK_APP="app:create_app"
+   flask run
+   # windows powershell:
+    # $env:FLASK_APP="app:create_app"; flask run
+   ```
+   Check if the following outputs are in the routes:
+     http://127.0.0.1:5000/api/health → `{"status":"healthy"}`
+  
+     http://127.0.0.1:5000/api/ping → tests DB connectivity (`SELECT 1`)
+3) Run the Vite frontend (port 5173)
+   ```
+   cd web
+   npm install
+   npm run dev
+   ```
+   Open: http://localhost:5173
+   The page calls `/api/health via` Vite’s proxy → Flask.
+   
