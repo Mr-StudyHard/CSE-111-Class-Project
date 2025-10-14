@@ -83,5 +83,9 @@ TMDB_API_KEY=your_key_here
    The page calls `/api/health via` Vite’s proxy → Flask.
 
 
-### UML Diagram 
+## UML Diagram 
 <img width="1236" height="685" alt="uml" src="https://github.com/user-attachments/assets/fc579134-8086-49e2-821d-a6356d37b726" />
+
+## ER Diagram 
+<img width="1266" height="1301" alt="ER drawio" src="https://github.com/user-attachments/assets/3456b38a-1c0b-4986-8ad8-6a58dabdc755" />
+
