@@ -86,7 +86,9 @@ TMDB_API_KEY=your_key_here
 ## UML Diagram 
 <img width="1920" height="1080" alt="CSE 111 UML (1)" src="https://github.com/user-attachments/assets/b002f0ea-05ed-4377-9628-3becb561a3e0" />
 
-## ER Diagram 
-<img width="1566" height="1471" alt="ER drawio (2)" src="https://github.com/user-attachments/assets/bc201054-65cd-445f-ae00-9cabde9a3df1" />
+## ER Diagram
+<img width="2091" height="1991" alt="ER drawio (5)" src="https://github.com/user-attachments/assets/e8b15eac-4422-4f1b-8164-27811b7dddae" />
+ 
+
 
 
