@@ -89,6 +89,8 @@ TMDB_API_KEY=your_key_here
 ## ER Diagram
 <img width="2091" height="1991" alt="ER drawio (5)" src="https://github.com/user-attachments/assets/e8b15eac-4422-4f1b-8164-27811b7dddae" />
  
+## Intermediate Diagram 
+<img width="1301" height="451" alt="intermediate_diag drawio" src="https://github.com/user-attachments/assets/ac506d3f-35df-46e5-ac8f-18e56e9ffb61" />
 
 
 
