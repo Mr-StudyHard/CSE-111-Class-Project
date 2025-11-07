@@ -99,3 +99,21 @@
 .btn-solid:hover { filter:brightness(1.05); }
 .form-footer { text-align:center; margin-top: 6px; }
 
+/* Home (Landing) */
+.hero { text-align: center; display: grid; gap: 16px; margin-top: 22px; }
+.hero h1 { font-size: 44px; font-weight: 800; margin: 8px 0; }
+.hero p { color: var(--muted); font-size: 16px; max-width: 720px; margin: 0 auto; }
+.hero-actions { margin-top: 8px; }
+
+.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 28px 0 18px; }
+@media (max-width: 900px){ .features { grid-template-columns: 1fr; } }
+.feature-card { background: var(--panel); border: 1px solid #23232a; border-radius: 12px; padding: 20px; text-align: center; display:grid; gap:8px; }
+.feature-icon { font-size: 28px; }
+.feature-card h3 { margin: 0; font-size: 18px; }
+.feature-card p { color: var(--muted); font-size: 14px; }
+
+.site-footer { border-top: 1px solid #23232a; padding-top: 16px; margin-top: 24px; color: var(--muted); display:grid; gap:6px; }
+.site-footer .links { display:flex; gap:16px; justify-content:center; }
+.site-footer a { color: var(--muted); text-decoration:none; }
+.site-footer a:hover { color: var(--text); }
+

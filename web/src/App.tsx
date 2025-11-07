@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import './App.css'
 import { getSummary, getList, refresh, search, type MediaItem } from './api'
 
-type Tab = 'analytics' | 'movies' | 'tv' | 'search'
+type Tab = 'home' | 'analytics' | 'movies' | 'tv' | 'search'
 type View = 'app' | 'auth' | 'login' | 'signup'
 
 function Stat({label, value}:{label:string;value:React.ReactNode}){
@@ -33,7 +33,7 @@ function Card({item}:{item:MediaItem}){
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('analytics')
+  const [tab, setTab] = useState<Tab>('home')
   const [view, setView] = useState<View>('app')
   const [busy, setBusy] = useState(false)
   const [summary, setSummary] = useState<any>()
@@ -153,6 +153,7 @@ export default function App() {
       <header className="header">
         <div className="brand">Movie & TV Analytics</div>
         <nav className="nav">
+          <button className={tab==='home'? 'active':''} onClick={()=>setTab('home')}>Home</button>
           <button className={tab==='analytics'? 'active':''} onClick={()=>setTab('analytics')}>Analytics</button>
           <button className={tab==='movies'? 'active':''} onClick={()=>setTab('movies')}>Movies</button>
           <button className={tab==='tv'? 'active':''} onClick={()=>setTab('tv')}>TV</button>
@@ -163,6 +164,42 @@ export default function App() {
           <button type="button" onClick={()=>setView('auth')}>Log in</button>
         </form>
       </header>
+      {tab==='home' && (
+        <section className="hero">
+          <h1>Movie &amp; TV Analytics</h1>
+          <p>Track trends, analyze ratings, and discover insights across your favorite movies and shows.</p>
+          <div className="hero-actions">
+            <button className="btn-solid btn-lg" onClick={()=>setTab('analytics')}>Get Started</button>
+          </div>
+
+          <div className="features">
+            <div className="feature-card">
+              <div className="feature-icon">🎬</div>
+              <h3>Explore Movies</h3>
+              <p>Dive into box office stats, critic reviews, and audience trends for every film.</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon">📺</div>
+              <h3>Track TV Shows</h3>
+              <p>Analyze popularity over seasons, compare networks, and follow ratings evolution.</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon">📈</div>
+              <h3>View Analytics</h3>
+              <p>Visualize data trends, compare genres, and uncover audience preferences.</p>
+            </div>
+          </div>
+
+          <footer className="site-footer">
+            <div className="links">
+              <a href="#privacy">Privacy Policy</a>
+              <a href="#terms">Terms of Service</a>
+            </div>
+            <div className="copy">© {new Date().getFullYear()} Movie &amp; TV Analytics.</div>
+          </footer>
+        </section>
+      )}
+
 
       <div className="toolbar">
         <button onClick={onRefresh} disabled={busy}>↻ Refresh (ingest 1 page)</button>
