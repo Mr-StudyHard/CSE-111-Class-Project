@@ -190,13 +190,7 @@ export default function App() {
             </div>
           </div>
 
-          <footer className="site-footer">
-            <div className="links">
-              <a href="#privacy">Privacy Policy</a>
-              <a href="#terms">Terms of Service</a>
-            </div>
-            <div className="copy">© {new Date().getFullYear()} Movie &amp; TV Analytics.</div>
-          </footer>
+          {/* Footer removed per design update */}
         </section>
       )}
 

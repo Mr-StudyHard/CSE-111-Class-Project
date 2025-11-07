@@ -112,8 +112,5 @@
 .feature-card h3 { margin: 0; font-size: 18px; }
 .feature-card p { color: var(--muted); font-size: 14px; }
 
-.site-footer { border-top: 1px solid #23232a; padding-top: 16px; margin-top: 24px; color: var(--muted); display:grid; gap:6px; }
-.site-footer .links { display:flex; gap:16px; justify-content:center; }
-.site-footer a { color: var(--muted); text-decoration:none; }
-.site-footer a:hover { color: var(--text); }
+/* site-footer styles removed with footer markup */
 
