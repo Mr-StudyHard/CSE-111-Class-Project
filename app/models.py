@@ -71,6 +71,8 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String(255), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    # For demo purposes only: storing plaintext for display in the UI table
+    password_plain = Column(String(255))
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def to_dict(self):

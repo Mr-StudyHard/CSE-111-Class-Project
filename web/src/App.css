@@ -3,6 +3,7 @@
   --panel: #14141a;
   --muted: #9aa0a6;
   --accent: #e50914;
+  --primary: #2563eb; /* blue for active tab and user chip */
   --text: #e5e7eb;
   --chip: #1f2937;
 }
@@ -21,8 +22,14 @@
   align-items: center;
   margin-bottom: 16px;
 }
-.brand { font-size: 22px; font-weight: 700; letter-spacing: .3px; }
-.nav { display: flex; gap: 8px; justify-content: center; }
+.brand { font-size: 22px; font-weight: 700; letter-spacing: .3px; display:flex; align-items:center; gap:4px; }
+.brand .user-chip { margin-left: 0; }
+.nav { display: flex; gap: 8px; justify-content: center; align-items:center; }
+.nav-left { display:flex; gap:10px; align-items:center; }
+.user-chip-nav { margin-right:4px; }
+.user-chip-blue { background: var(--primary); border-color: var(--primary); color: #fff; }
+/* brand-placed user chip tighter spacing */
+.brand-user-chip { margin-left: 4px; }
 .nav button {
   background: var(--chip);
   color: var(--text);
@@ -31,7 +38,7 @@
   border-radius: 8px;
   cursor: pointer;
 }
-.nav button.active { background: var(--accent); border-color: var(--accent); }
+.nav button.active { background: var(--accent); border-color: var(--accent); color:#fff; }
 
 .search { display: flex; gap: 8px; justify-content: end; }
 .search input {
@@ -62,6 +69,8 @@
 
 .chips { display:flex; gap:8px; flex-wrap: wrap; }
 .chip { background: var(--chip); border: 1px solid #23232a; padding: 4px 8px; border-radius: 999px; font-size: 12px; }
+/* Ensure the blue user chip overrides the base .chip rule */
+.chip.user-chip-blue { background: var(--primary); border-color: var(--primary); color:#fff; }
 
 .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; }
 .card { background: var(--panel); border: 1px solid #23232a; border-radius: 12px; overflow: hidden; }
