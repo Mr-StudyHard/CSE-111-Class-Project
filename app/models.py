@@ -63,3 +63,15 @@ class MediaItem(Base):
             "genres": self.genres.split(",") if self.genres else [],
             "original_language": self.original_language,
         }
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String(255), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {"id": self.id, "email": self.email}
