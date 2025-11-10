@@ -1,62 +1,109 @@
 from __future__ import annotations
 
+import sqlite3
 from collections import Counter
+from datetime import datetime
 from typing import Dict, List, Tuple
 
-from sqlalchemy import func
-from sqlalchemy.orm import Session
-
-from .models import MediaItem
+from .models import media_row_to_dict
 from .tmdb import TMDbClient
 
 
-def upsert_media(session: Session, items: List[dict]) -> Tuple[int, int]:
-    """Insert or update media items. Returns (inserted, updated)."""
-    inserted = updated = 0
-    existing = {}
-    if not items:
-        return inserted, updated
-    # Preload existing rows for efficiency (avoid tuple_ to keep it simple/cross-db)
-    movie_ids = [i["tmdb_id"] for i in items if i["media_type"] == "movie"]
-    tv_ids = [i["tmdb_id"] for i in items if i["media_type"] == "tv"]
-    if movie_ids:
-        for r in (
-            session.query(MediaItem)
-            .filter(MediaItem.media_type == "movie", MediaItem.tmdb_id.in_(movie_ids))
-            .all()
-        ):
-            existing[(r.tmdb_id, r.media_type)] = r
-    if tv_ids:
-        for r in (
-            session.query(MediaItem)
-            .filter(MediaItem.media_type == "tv", MediaItem.tmdb_id.in_(tv_ids))
-            .all()
-        ):
-            existing[(r.tmdb_id, r.media_type)] = r
+def _prepare_media_payload(data: dict) -> dict:
+    """Normalise incoming media data for storage."""
+    genres = data.get("genres") or ""
+    if isinstance(genres, list):
+        genres = ",".join([g for g in genres if g])
+    return {
+        "tmdb_id": data.get("tmdb_id"),
+        "media_type": data.get("media_type"),
+        "title": data.get("title") or "Untitled",
+        "overview": data.get("overview") or "",
+        "poster_path": data.get("poster_path"),
+        "backdrop_path": data.get("backdrop_path"),
+        "vote_average": float(data.get("vote_average") or 0.0),
+        "vote_count": int(data.get("vote_count") or 0),
+        "popularity": float(data.get("popularity") or 0.0),
+        "release_date": data.get("release_date"),
+        "genres": genres,
+        "original_language": data.get("original_language"),
+    }
 
-    for data in items:
-        key = (data["tmdb_id"], data["media_type"])
-        row = existing.get(key)
+
+def upsert_media(conn: sqlite3.Connection, items: List[dict]) -> Tuple[int, int]:
+    """Insert or update media items. Returns (inserted, updated)."""
+    if not items:
+        return 0, 0
+
+    inserted = updated = 0
+    cur = conn.cursor()
+    now = datetime.utcnow().isoformat(timespec="seconds")
+
+    for raw in items:
+        payload = _prepare_media_payload(raw)
+        key = (payload["tmdb_id"], payload["media_type"])
+        cur.execute(
+            "SELECT id FROM media_items WHERE tmdb_id = ? AND media_type = ?",
+            key,
+        )
+        row = cur.fetchone()
         if row:
-            # update a few fields
-            row.title = data["title"]
-            row.overview = data.get("overview")
-            row.poster_path = data.get("poster_path")
-            row.backdrop_path = data.get("backdrop_path")
-            row.vote_average = data.get("vote_average") or 0.0
-            row.vote_count = data.get("vote_count") or 0
-            row.popularity = data.get("popularity") or 0.0
-            row.release_date = data.get("release_date")
-            row.genres = data.get("genres") or ""
-            row.original_language = data.get("original_language")
-            updated += 1
+            cur.execute(
+                """
+                UPDATE media_items
+                SET title = ?, overview = ?, poster_path = ?, backdrop_path = ?,
+                    vote_average = ?, vote_count = ?, popularity = ?, release_date = ?,
+                    genres = ?, original_language = ?, updated_at = ?
+                WHERE tmdb_id = ? AND media_type = ?
+                """,
+                (
+                    payload["title"],
+                    payload["overview"],
+                    payload["poster_path"],
+                    payload["backdrop_path"],
+                    payload["vote_average"],
+                    payload["vote_count"],
+                    payload["popularity"],
+                    payload["release_date"],
+                    payload["genres"],
+                    payload["original_language"],
+                    now,
+                    payload["tmdb_id"],
+                    payload["media_type"],
+                ),
+            )
+            updated += int(cur.rowcount > 0)
         else:
-            session.add(MediaItem(**data))
+            cur.execute(
+                """
+                INSERT INTO media_items (
+                    tmdb_id, media_type, title, overview, poster_path, backdrop_path,
+                    vote_average, vote_count, popularity, release_date, genres,
+                    original_language, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["tmdb_id"],
+                    payload["media_type"],
+                    payload["title"],
+                    payload["overview"],
+                    payload["poster_path"],
+                    payload["backdrop_path"],
+                    payload["vote_average"],
+                    payload["vote_count"],
+                    payload["popularity"],
+                    payload["release_date"],
+                    payload["genres"],
+                    payload["original_language"],
+                    now,
+                    now,
+                ),
+            )
             inserted += 1
     return inserted, updated
 
 
-def ingest_trending_and_top(session: Session, pages: int = 1) -> Dict[str, int]:
+def ingest_trending_and_top(conn: sqlite3.Connection, pages: int = 1) -> Dict[str, int]:
     client = TMDbClient()
 
     collected: List[dict] = []
@@ -72,53 +119,77 @@ def ingest_trending_and_top(session: Session, pages: int = 1) -> Dict[str, int]:
         tv = client.top_rated_tv(p)
         collected.extend([client.normalize(r | {"media_type": "tv"}) for r in tv.get("results", [])])
 
-    ins, upd = upsert_media(session, collected)
-    session.commit()
+    ins, upd = upsert_media(conn, collected)
+    conn.commit()
     return {"inserted": ins, "updated": upd, "total": ins + upd}
 
 
-def list_items(session: Session, media_type: str, sort: str = "popularity", page: int = 1, limit: int = 20) -> Dict[str, object]:
-    sort_col = MediaItem.popularity if sort == "popularity" else MediaItem.vote_average
-    q = (
-        session.query(MediaItem)
-        .filter(MediaItem.media_type == media_type)
-        .order_by(sort_col.desc())
-    )
-    total = q.count()
-    rows = q.offset((page - 1) * limit).limit(limit).all()
-    return {"total": total, "page": page, "results": [r.to_dict() for r in rows]}
+def list_items(conn: sqlite3.Connection, media_type: str, sort: str = "popularity", page: int = 1, limit: int = 20) -> Dict[str, object]:
+    sort_column = "popularity" if sort == "popularity" else "vote_average"
+    offset = (page - 1) * limit
+
+    total = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM media_items WHERE media_type = ?",
+        (media_type,),
+    ).fetchone()["cnt"]
+
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM media_items
+        WHERE media_type = ?
+        ORDER BY {sort_column} DESC
+        LIMIT ? OFFSET ?
+        """,
+        (media_type, limit, offset),
+    ).fetchall()
+
+    return {
+        "total": total,
+        "page": page,
+        "results": [media_row_to_dict(row) for row in rows],
+    }
 
 
-def compute_summary(session: Session) -> Dict[str, object]:
-    total = session.query(func.count(MediaItem.id)).scalar() or 0
-    movies = session.query(func.count(MediaItem.id)).filter(MediaItem.media_type == "movie").scalar() or 0
-    tv = session.query(func.count(MediaItem.id)).filter(MediaItem.media_type == "tv").scalar() or 0
-    avg_rating = session.query(func.avg(MediaItem.vote_average)).scalar() or 0.0
+def compute_summary(conn: sqlite3.Connection) -> Dict[str, object]:
+    cur = conn.cursor()
+    total = cur.execute("SELECT COUNT(*) FROM media_items").fetchone()[0] or 0
+    movies = cur.execute(
+        "SELECT COUNT(*) FROM media_items WHERE media_type = 'movie'"
+    ).fetchone()[0] or 0
+    tv = cur.execute(
+        "SELECT COUNT(*) FROM media_items WHERE media_type = 'tv'"
+    ).fetchone()[0] or 0
+    avg_rating = cur.execute(
+        "SELECT AVG(vote_average) FROM media_items"
+    ).fetchone()[0] or 0.0
 
-    # naive genre aggregation from stored comma-separated strings
     genres_counter: Counter[str] = Counter()
-    for (gstr,) in session.query(MediaItem.genres).all():
-        if not gstr:
+    for (genre_str,) in cur.execute("SELECT genres FROM media_items").fetchall():
+        if not genre_str:
             continue
-        for g in gstr.split(","):
-            genres_counter[g.strip()] += 1
+        for genre in genre_str.split(","):
+            genre = genre.strip()
+            if genre:
+                genres_counter[genre] += 1
 
     top_genres = [
         {"genre": name, "count": count}
         for name, count in genres_counter.most_common(10)
     ]
 
-    # languages
-    lang_counts = (
-        session.query(MediaItem.original_language, func.count(MediaItem.id))
-        .group_by(MediaItem.original_language)
-        .order_by(func.count(MediaItem.id).desc())
-        .limit(10)
-        .all()
-    )
+    lang_rows = cur.execute(
+        """
+        SELECT original_language, COUNT(*) AS cnt
+        FROM media_items
+        GROUP BY original_language
+        ORDER BY cnt DESC
+        LIMIT 10
+        """
+    ).fetchall()
     languages = [
-        {"language": lang or "unknown", "count": cnt}
-        for lang, cnt in lang_counts
+        {"language": row["original_language"] or "unknown", "count": row["cnt"]}
+        for row in lang_rows
     ]
 
     return {

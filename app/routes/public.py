@@ -1,12 +1,13 @@
 # /movie-tv-analytics/app/routes/public.py
-from flask import Blueprint, jsonify, request, current_app
-from sqlalchemy import func
+import sqlite3
 
-from ..services import ingest_trending_and_top, compute_summary, list_items, search_live
-from ..models import User
+from flask import Blueprint, jsonify, request, current_app
 from werkzeug.security import generate_password_hash
 
+from ..services import ingest_trending_and_top, compute_summary, list_items, search_live
+
 bp = Blueprint("public", __name__, url_prefix="/api")
+
 
 @bp.get("/health")
 def health():
@@ -17,35 +18,35 @@ def health():
 @bp.post("/refresh")
 def refresh():
     """Ingest one page of trending + top-rated movies/TV from TMDb into the local DB."""
-    session = current_app.session()
-    result = ingest_trending_and_top(session=session, pages=int(request.args.get("pages", 1)))
+    conn = current_app.session()
+    result = ingest_trending_and_top(conn=conn, pages=int(request.args.get("pages", 1)))
     return jsonify({"ok": True, **result})
 
 
 @bp.get("/summary")
 def summary():
-    session = current_app.session()
-    data = compute_summary(session)
+    conn = current_app.session()
+    data = compute_summary(conn)
     return jsonify(data)
 
 
 @bp.get("/movies")
 def movies():
-    session = current_app.session()
+    conn = current_app.session()
     sort = request.args.get("sort", "popularity")
     page = int(request.args.get("page", 1))
     limit = int(request.args.get("limit", 20))
-    data = list_items(session, media_type="movie", sort=sort, page=page, limit=limit)
+    data = list_items(conn, media_type="movie", sort=sort, page=page, limit=limit)
     return jsonify(data)
 
 
 @bp.get("/tv")
 def tv():
-    session = current_app.session()
+    conn = current_app.session()
     sort = request.args.get("sort", "popularity")
     page = int(request.args.get("page", 1))
     limit = int(request.args.get("limit", 20))
-    data = list_items(session, media_type="tv", sort=sort, page=page, limit=limit)
+    data = list_items(conn, media_type="tv", sort=sort, page=page, limit=limit)
     return jsonify(data)
 
 
@@ -64,8 +65,10 @@ def users():
     WARNING: In a real application you would NEVER return plaintext passwords.
     This is done solely to satisfy the current demo requirement.
     """
-    session = current_app.session()
-    rows = session.query(User).order_by(User.id.asc()).all()
+    conn = current_app.session()
+    rows = conn.execute(
+        "SELECT email, password_plain FROM users ORDER BY id ASC"
+    ).fetchall()
 
     def username(email: str) -> str:
         try:
@@ -75,15 +78,16 @@ def users():
 
     resp = jsonify([
         {
-            "user": username(u.email),
-            "email": u.email,
-            "password": u.password_plain or "",
+            "user": username(row["email"]),
+            "email": row["email"],
+            "password": row["password_plain"] or "",
         }
-        for u in rows
+        for row in rows
     ])
     # Prevent browsers from caching demo credentials
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
 
 @bp.post("/login")
 def login():
@@ -99,17 +103,15 @@ def login():
         return jsonify({"ok": False, "error": "Missing email or password"}), 400
 
     try:
-        session = current_app.session()
-        # Case-insensitive email match for convenience
-        user = session.query(User).filter(func.lower(User.email) == email.lower()).first()
-        if not user:
-            return jsonify({"ok": False, "error": "Invalid credentials"}), 401
-        # Compare plaintext demo password
-        if (user.password_plain or "") != password:
+        conn = current_app.session()
+        row = conn.execute(
+            "SELECT email, password_plain FROM users WHERE lower(email) = lower(?) LIMIT 1",
+            (email,),
+        ).fetchone()
+        if not row or (row["password_plain"] or "") != password:
             return jsonify({"ok": False, "error": "Invalid credentials"}), 401
 
-        # Success: return minimal profile
-        uname = email.split("@",1)[0] if "@" in email else email
+        uname = email.split("@", 1)[0] if "@" in email else email
         return jsonify({"ok": True, "user": uname, "email": email})
     except Exception as e:
         current_app.logger.exception("/api/login failed")
@@ -118,36 +120,36 @@ def login():
 
 @bp.post("/signup")
 def signup():
-    """Create a new demo user with plaintext password.
-
-    Body: {"email": str, "password": str, "username": str?}
-    Returns: {ok: true, user, email} or {ok:false, error}
-
-    NOTE: This is a simplified demo.
-    """
+    """Create a new demo user with plaintext password."""
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip()
     password = (data.get("password") or "").strip()
     if not email or not password:
         return jsonify({"ok": False, "error": "Missing email or password"}), 400
 
+    conn = current_app.session()
     try:
-        session = current_app.session()
-        # Enforce unique email (case-insensitive)
-        existing = session.query(User).filter(func.lower(User.email) == email.lower()).first()
+        existing = conn.execute(
+            "SELECT 1 FROM users WHERE lower(email) = lower(?) LIMIT 1",
+            (email,),
+        ).fetchone()
         if existing:
             return jsonify({"ok": False, "error": "Email already exists"}), 409
 
-        # Populate both hashed and plaintext (demo) columns to satisfy NOT NULL constraint
         hashed = generate_password_hash(password)
-        u = User(email=email, password_hash=hashed, password_plain=password)
-        session.add(u)
-        session.commit()
+        conn.execute(
+            "INSERT INTO users (email, password_hash, password_plain) VALUES (?, ?, ?)",
+            (email, hashed, password),
+        )
+        conn.commit()
 
-        uname = email.split("@",1)[0] if "@" in email else email
+        uname = email.split("@", 1)[0] if "@" in email else email
         return jsonify({"ok": True, "user": uname, "email": email})
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return jsonify({"ok": False, "error": "Email already exists"}), 409
     except Exception as e:
-        session.rollback()
+        conn.rollback()
         current_app.logger.exception("/api/signup failed")
         return jsonify({"ok": False, "error": f"server-error: {str(e)}"}), 500
 
