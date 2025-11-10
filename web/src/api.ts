@@ -24,6 +24,19 @@ export type MediaItem = {
 	original_language?: string
 }
 
+export type TrendingItem = {
+	item_id: number
+	tmdb_id: number
+	media_type: 'movie' | 'show'
+	title: string
+	overview?: string
+	poster_url?: string | null
+	backdrop_url?: string | null
+	tmdb_vote_avg?: number | null
+	release_date?: string | null
+	genres: string[]
+}
+
 export async function getSummary() {
 	const { data } = await api.get('/summary')
 	return data as {
@@ -62,6 +75,11 @@ export async function getUsers() {
 export async function getHealth() {
 	const { data } = await api.get('/health')
 	return data as { status: string }
+}
+
+export async function getTrending(period: 'weekly' | 'monthly' | 'all' = 'weekly', limit = 20) {
+	const { data } = await api.get('/trending', { params: { period, limit } })
+	return (data?.results ?? []) as TrendingItem[]
 }
 
 export type LoginResponse = { ok: true; user: string; email: string } | { ok: false; error: string }

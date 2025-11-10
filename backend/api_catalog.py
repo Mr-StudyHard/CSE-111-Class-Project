@@ -13,6 +13,90 @@ app.teardown_appcontext(close_db)
 def _dicts(rows):
     return [dict(row) for row in rows]
 
+IMAGE_BASE_URL = "https://image.tmdb.org/t/p"
+PERIOD_DEFAULT_LIMITS = {"weekly": 10, "monthly": 20, "all": 40}
+MAX_TRENDING_LIMIT = 50
+
+TRENDING_SQL = """
+SELECT *
+FROM (
+    SELECT 'movie' AS media_type,
+           m.movie_id AS item_id,
+           m.tmdb_id,
+           m.title,
+           COALESCE(m.overview, '') AS overview,
+           m.poster_path,
+           NULL AS backdrop_path,
+           m.tmdb_vote_avg AS score,
+           CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
+           GROUP_CONCAT(DISTINCT g.name) AS genres
+    FROM movies m
+    LEFT JOIN movie_genres mg ON mg.movie_id = m.movie_id
+    LEFT JOIN genres g ON g.genre_id = mg.genre_id
+    GROUP BY m.movie_id
+    UNION ALL
+    SELECT 'show' AS media_type,
+           s.show_id AS item_id,
+           s.tmdb_id,
+           s.title,
+           COALESCE(s.overview, '') AS overview,
+           s.poster_path,
+           NULL AS backdrop_path,
+           s.tmdb_vote_avg AS score,
+           s.first_air_date AS release_date,
+           GROUP_CONCAT(DISTINCT g.name) AS genres
+    FROM shows s
+    LEFT JOIN show_genres sg ON sg.show_id = s.show_id
+    LEFT JOIN genres g ON g.genre_id = sg.genre_id
+    GROUP BY s.show_id
+)
+ORDER BY (score IS NULL), score DESC, title
+LIMIT ?
+"""
+
+
+def _tmdb_image(path: str | None, size: str) -> str | None:
+    if not path:
+        return None
+    if path.startswith("http"):
+        return path
+    return f"{IMAGE_BASE_URL}/{size}{path}"
+
+
+@app.get("/api/trending")
+def trending():
+    period = (request.args.get("period") or "weekly").lower()
+    limit_param = request.args.get("limit")
+    base_limit = PERIOD_DEFAULT_LIMITS.get(period, PERIOD_DEFAULT_LIMITS["weekly"])
+    try:
+        limit = int(limit_param) if limit_param else base_limit
+    except (TypeError, ValueError):
+        limit = base_limit
+    limit = max(1, min(limit, MAX_TRENDING_LIMIT))
+
+    rows = query(TRENDING_SQL, (limit,))
+    results = []
+    for row in rows:
+        data = dict(row)
+        genres = [g.strip() for g in (data.get("genres") or "").split(",") if g.strip()]
+        poster_url = _tmdb_image(data.get("poster_path"), "w342")
+        backdrop_url = _tmdb_image(data.get("backdrop_path"), "w780") or _tmdb_image(data.get("poster_path"), "w780")
+        results.append(
+            {
+                "media_type": data["media_type"],
+                "item_id": data["item_id"],
+                "tmdb_id": data["tmdb_id"],
+                "title": data["title"],
+                "overview": data.get("overview") or "",
+                "poster_url": poster_url,
+                "backdrop_url": backdrop_url,
+                "tmdb_vote_avg": data.get("score"),
+                "release_date": data.get("release_date"),
+                "genres": genres,
+            }
+        )
+    return jsonify({"period": period, "results": results})
+
 
 @app.get("/api/search")
 def search_catalog():

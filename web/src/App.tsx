@@ -1,175 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem } from './api'
 
 type Tab = 'home' | 'analytics' | 'movies' | 'tv' | 'search'
 type View = 'app' | 'auth' | 'login' | 'signup' | 'accounts'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
-
-const TRENDING_MOCK: Record<TrendingPeriod, MediaItem[]> = {
-  weekly: [
-    {
-      tmdb_id: 101,
-      media_type: 'movie',
-      title: 'The Last Horizon',
-      overview: 'An elite crew ventures beyond the solar frontier to rescue a stranded science vessel before it disappears into a cosmic anomaly.',
-      vote_average: 8.4,
-      release_date: '2024-08-15',
-      genres: ['Sci-Fi', 'Adventure'],
-      poster_path: 'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1523419409543-0c1df022bdd1?auto=format&fit=crop&w=1280&q=80',
-      original_language: 'en',
-    },
-    {
-      tmdb_id: 102,
-      media_type: 'tv',
-      title: 'Neon Nights',
-      overview: 'A journalist uncovers a conspiracy inside a mega-corporation while navigating an electric, neon-lit metropolis.',
-      vote_average: 7.9,
-      genres: ['Thriller', 'Drama'],
-      poster_path: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1529429617124-aee711a21d46?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2024-05-10',
-      original_language: 'en',
-    },
-    {
-      tmdb_id: 103,
-      media_type: 'movie',
-      title: 'Legends of Aether',
-      overview: 'Heroes from distant realms unite to protect a floating archipelago powered by ancient magic.',
-      vote_average: 8.1,
-      genres: ['Fantasy'],
-      poster_path: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1528825871115-3581a5387919?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2024-04-02',
-      original_language: 'en',
-    },
-    {
-      tmdb_id: 104,
-      media_type: 'tv',
-      title: 'Atlas Station',
-      overview: 'The crew of a deep-space research hub faces an unknown organism with its own intelligence.',
-      vote_average: 8.7,
-      genres: ['Sci-Fi', 'Mystery'],
-      poster_path: 'https://images.unsplash.com/photo-1492724441997-5dc865305da7?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1475694867812-f82b8696d610?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2024-03-17',
-      original_language: 'en',
-    },
-  ],
-  monthly: [
-    {
-      tmdb_id: 201,
-      media_type: 'movie',
-      title: 'Golden Summer',
-      overview: 'A heartfelt drama following three friends chasing their dreams along Italy’s sunlit coast.',
-      vote_average: 7.6,
-      genres: ['Drama', 'Romance'],
-      poster_path: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1476480862126-209bfaa8edc8?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2023-07-21',
-      original_language: 'it',
-    },
-    {
-      tmdb_id: 202,
-      media_type: 'tv',
-      title: 'Echoes of Terra',
-      overview: 'An ecological mystery series charting humanity’s desperate attempt to heal a fractured planet.',
-      vote_average: 8.0,
-      genres: ['Drama', 'Sci-Fi'],
-      poster_path: 'https://images.unsplash.com/photo-1478720568477-152d9b164e26?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2023-11-03',
-      original_language: 'en',
-    },
-    {
-      tmdb_id: 203,
-      media_type: 'movie',
-      title: 'Midnight Pulse',
-      overview: 'A pulse-pounding heist thriller unfolding in real time across downtown Seoul.',
-      vote_average: 8.2,
-      genres: ['Action', 'Thriller'],
-      poster_path: 'https://images.unsplash.com/photo-1500534307688-6023f12e02b2?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1526481280695-3c4697e2f82e?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2024-01-12',
-      original_language: 'ko',
-    },
-    {
-      tmdb_id: 204,
-      media_type: 'tv',
-      title: 'Starlight Academy',
-      overview: 'Young virtuosos compete at an elite performing arts school orbiting Earth.',
-      vote_average: 7.8,
-      genres: ['Drama', 'Music'],
-      poster_path: 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2023-09-06',
-      original_language: 'en',
-    },
-  ],
-  all: [
-    {
-      tmdb_id: 301,
-      media_type: 'movie',
-      title: 'Riftwalkers',
-      overview: 'Veteran explorers guard ancient portals that connect distant civilizations in space and time.',
-      vote_average: 8.9,
-      genres: ['Sci-Fi', 'Adventure'],
-      poster_path: 'https://images.unsplash.com/photo-1519125323398-675f0ddb6308?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2022-05-19',
-      original_language: 'en',
-    },
-    {
-      tmdb_id: 302,
-      media_type: 'tv',
-      title: 'Oracle City',
-      overview: 'In a metropolis where future crimes are predicted, a detective questions the system’s true motives.',
-      vote_average: 9.1,
-      genres: ['Sci-Fi', 'Drama'],
-      poster_path: 'https://images.unsplash.com/photo-1492724441997-5dc865305da7?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2021-10-08',
-      original_language: 'en',
-    },
-    {
-      tmdb_id: 303,
-      media_type: 'movie',
-      title: 'Harbor Lights',
-      overview: 'A sweeping romance that follows two strangers brought together by a century-old mystery.',
-      vote_average: 8.5,
-      genres: ['Romance', 'Mystery'],
-      poster_path: 'https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2022-02-14',
-      original_language: 'en',
-    },
-    {
-      tmdb_id: 304,
-      media_type: 'tv',
-      title: 'Infinite Echo',
-      overview: 'An anthology series chronicling humanity’s encounters with mysterious signals from the cosmos.',
-      vote_average: 8.7,
-      genres: ['Sci-Fi', 'Anthology'],
-      poster_path: 'https://images.unsplash.com/photo-1446776811953-b23d57bd21aa?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1482192597420-4817fdd7e8b0?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2020-04-28',
-      original_language: 'en',
-    },
-    {
-      tmdb_id: 305,
-      media_type: 'movie',
-      title: 'Edge of Silence',
-      overview: 'A lone spy must decide who to trust when a mission to expose corruption turns personal.',
-      vote_average: 8.3,
-      genres: ['Thriller'],
-      poster_path: 'https://images.unsplash.com/photo-1517602302552-471fe67acf66?auto=format&fit=crop&w=300&q=80',
-      backdrop_path: 'https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=1280&q=80',
-      release_date: '2021-12-09',
-      original_language: 'en',
-    },
-  ],
-}
 
 function Stat({label, value}:{label:string;value:React.ReactNode}){
   return (
@@ -214,6 +49,9 @@ export default function App() {
   const [accountsError, setAccountsError] = useState<string | null>(null)
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null)
   const [trendingPeriod, setTrendingPeriod] = useState<TrendingPeriod>('weekly')
+  const [trending, setTrending] = useState<TrendingItem[]>([])
+  const [trendingLoading, setTrendingLoading] = useState(false)
+  const [trendingError, setTrendingError] = useState<string | null>(null)
   const [carouselIndex, setCarouselIndex] = useState(0)
   // Remember-me support: if a profile was stored and flag set, restore it.
   const [currentUser, setCurrentUser] = useState<{user:string;email:string}|null>(() => {
@@ -245,7 +83,33 @@ export default function App() {
 
   useEffect(() => { load() }, [])
 
-  const trending = useMemo(() => TRENDING_MOCK[trendingPeriod], [trendingPeriod])
+  useEffect(() => {
+    let cancelled = false
+    setTrendingLoading(true)
+    setTrendingError(null)
+    ;(async () => {
+      try {
+        const results = await getTrending(trendingPeriod, 40)
+        if (!cancelled) {
+          setTrending(results)
+          setCarouselIndex(0)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setTrending([])
+          setTrendingError('Trending data unavailable. Try running the TMDb ETL loader.')
+        }
+      } finally {
+        if (!cancelled) {
+          setTrendingLoading(false)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [trendingPeriod])
+
   const heroSlides = useMemo(() => trending.slice(0, Math.min(trending.length, 5)), [trending])
   const activeHeroIndex = heroSlides.length > 0 ? Math.min(carouselIndex, heroSlides.length - 1) : 0
 
@@ -578,14 +442,13 @@ export default function App() {
   }
 
   // Auth landing page (Log in / Sign Up)
-  const posterFor = (path?: string) => {
+  const posterFor = (path?: string | null, size: 'w185' | 'w342' | 'w500' | 'w780' = 'w185') => {
     if(!path) return undefined
-    return path.startsWith('http') ? path : `https://image.tmdb.org/t/p/w185${path}`
+    return path.startsWith('http') ? path : `https://image.tmdb.org/t/p/${size}${path}`
   }
 
-  const backdropFor = (path?: string) => {
-    if(!path) return undefined
-    return path.startsWith('http') ? path : `https://image.tmdb.org/t/p/w1280${path}`
+  const backdropFor = (path?: string | null) => {
+    return posterFor(path, 'w780')
   }
 
   if(view === 'auth'){
@@ -740,18 +603,24 @@ export default function App() {
 
           <div className="home-spotlight">
             <div className="trending-hero">
-              {heroSlides.length === 0 ? (
+              {trendingLoading ? (
+                <div className="trending-hero-empty">Loading trending titles…</div>
+              ) : heroSlides.length === 0 ? (
                 <div className="trending-hero-empty">
-                  Connect your TMDb API key to replace these placeholder tiles with live trending data.
+                  {trendingError ?? 'Run the TMDb ETL loader to populate trending titles.'}
                 </div>
               ) : (
                 heroSlides.map((item, idx) => {
                   const isActive = idx === activeHeroIndex
-                  const backdrop = backdropFor(item.backdrop_path)
-                  const overview = item.overview && item.overview.length > 220 ? `${item.overview.slice(0, 217)}…` : item.overview
+                  const backdrop = backdropFor(item.backdrop_url ?? item.poster_url ?? null)
+                  const overview =
+                    item.overview && item.overview.length > 220
+                      ? `${item.overview.slice(0, 217)}…`
+                      : item.overview
+                  const rating = item.tmdb_vote_avg
                   return (
                     <div
-                      key={`hero-${item.media_type}-${item.tmdb_id}`}
+                      key={`hero-${item.media_type}-${item.tmdb_id}-${idx}`}
                       className={`trending-hero-slide ${isActive ? 'active' : ''}`}
                     >
                       <div
@@ -764,9 +633,9 @@ export default function App() {
                         <h2>{item.title}</h2>
                         <p>{overview || 'No synopsis available just yet.'}</p>
                         <div className="trending-hero-meta">
-                          <span>⭐ {item.vote_average?.toFixed?.(1) ?? '—'}</span>
+                          <span>⭐ {rating != null ? rating.toFixed(1) : '—'}</span>
                           {item.release_date && <span>📅 {item.release_date}</span>}
-                          {(item.genres?.length ?? 0) > 0 && <span>{item.genres!.slice(0, 2).join(' • ')}</span>}
+                          {item.genres.length > 0 && <span>{item.genres.slice(0, 2).join(' • ')}</span>}
                         </div>
                       </div>
                     </div>
@@ -811,7 +680,7 @@ export default function App() {
               <div className="trending-rail-header">
                 <div>
                   <h3>Popular &amp; Trending</h3>
-                  <p>Sample leaderboard until the TMDb API is connected.</p>
+                  <p>Powered by the latest titles ingested from TMDb.</p>
                 </div>
                 <div className="trending-rail-tabs">
                   {(['weekly', 'monthly', 'all'] as TrendingPeriod[]).map(period => (
@@ -828,16 +697,19 @@ export default function App() {
               </div>
 
               <div className="trending-rail-list">
-                {trending.length === 0 && (
+                {trendingLoading && (
+                  <div className="trending-rail-empty">Loading leaderboard…</div>
+                )}
+                {!trendingLoading && trending.length === 0 && (
                   <div className="trending-rail-empty">
-                    Add your TMDb API key to load live rankings.
+                    {trendingError ?? 'Run the TMDb ETL loader to populate trending titles.'}
                   </div>
                 )}
-                {trending.length > 0 && trending.map((item, index) => {
-                  const poster = posterFor(item.poster_path)
-                  const genres = (item.genres && item.genres.length > 0) ? item.genres.slice(0, 2).join(' • ') : '—'
+                {!trendingLoading && trending.map((item, index) => {
+                  const poster = posterFor(item.poster_url, 'w185')
+                  const genres = item.genres.length > 0 ? item.genres.slice(0, 2).join(' • ') : '—'
                   return (
-                    <div key={`leaderboard-${item.media_type}-${item.tmdb_id}`} className="trending-rail-item">
+                    <div key={`leaderboard-${item.media_type}-${item.tmdb_id}-${index}`} className="trending-rail-item">
                       <div className="rank">{index + 1}</div>
                       <div className="thumb">
                         {poster ? <img src={poster} alt={item.title} loading="lazy" /> : <div className="thumb-placeholder">🎬</div>}
@@ -846,7 +718,7 @@ export default function App() {
                         <div className="title" title={item.title}>{item.title}</div>
                         <div className="meta">
                           <span>{item.media_type === 'movie' ? 'Movie' : 'TV'}</span>
-                          <span>⭐ {item.vote_average?.toFixed?.(1) ?? '—'}</span>
+                          <span>⭐ {item.tmdb_vote_avg != null ? item.tmdb_vote_avg.toFixed(1) : '—'}</span>
                         </div>
                         <div className="genres">{genres}</div>
                       </div>
