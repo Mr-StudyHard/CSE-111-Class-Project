@@ -110,7 +110,10 @@ export default function App() {
     }
   }, [trendingPeriod])
 
-  const heroSlides = useMemo(() => trending.slice(0, Math.min(trending.length, 5)), [trending])
+  const heroSlides = useMemo(
+    () => trending.filter(item => item.backdrop_url || item.poster_url).slice(0, Math.min(trending.length, 5)),
+    [trending]
+  )
   const activeHeroIndex = heroSlides.length > 0 ? Math.min(carouselIndex, heroSlides.length - 1) : 0
 
   useEffect(() => {

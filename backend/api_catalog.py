@@ -74,13 +74,15 @@ def trending():
         limit = base_limit
     limit = max(1, min(limit, MAX_TRENDING_LIMIT))
 
-    rows = query(TRENDING_SQL, (limit,))
+    rows = query(TRENDING_SQL, (limit * 2,))
     results = []
     for row in rows:
         data = dict(row)
         genres = [g.strip() for g in (data.get("genres") or "").split(",") if g.strip()]
         poster_url = _tmdb_image(data.get("poster_path"), "w342")
-        backdrop_url = _tmdb_image(data.get("backdrop_path"), "w780") or _tmdb_image(data.get("poster_path"), "w780")
+        backdrop_url = _tmdb_image(data.get("backdrop_path"), "w780") or poster_url
+        if not poster_url and not backdrop_url:
+            continue
         results.append(
             {
                 "media_type": data["media_type"],
@@ -95,7 +97,7 @@ def trending():
                 "genres": genres,
             }
         )
-    return jsonify({"period": period, "results": results})
+    return jsonify({"period": period, "results": results[:limit]})
 
 
 @app.get("/api/search")
