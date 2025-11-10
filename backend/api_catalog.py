@@ -29,11 +29,11 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
     # All: prioritize rating
     
     if period == "weekly":
-        order_clause = "ORDER BY (popularity IS NULL), popularity DESC, (score IS NULL), score DESC, title"
+        order_clause = "ORDER BY popularity DESC, score DESC, title"
     elif period == "monthly":
-        order_clause = "ORDER BY (popularity IS NULL), (score IS NULL), (popularity * 0.5 + score * 10) DESC, title"
+        order_clause = "ORDER BY (COALESCE(popularity, 0) * 0.5 + COALESCE(score, 0) * 10) DESC, title"
     else:  # all
-        order_clause = "ORDER BY (score IS NULL), score DESC, (popularity IS NULL), popularity DESC, title"
+        order_clause = "ORDER BY score DESC, popularity DESC, title"
     
     sql = f"""
     SELECT *
