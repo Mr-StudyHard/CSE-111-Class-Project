@@ -16,6 +16,8 @@ def _dicts(rows):
 IMAGE_BASE_URL = "https://image.tmdb.org/t/p"
 PERIOD_DEFAULT_LIMITS = {"weekly": 10, "monthly": 20, "all": 40}
 MAX_TRENDING_LIMIT = 50
+MAX_PAGE_SIZE = 50
+DEFAULT_PAGE_SIZE = 20
 
 TRENDING_SQL = """
 SELECT *
@@ -61,6 +63,115 @@ def _tmdb_image(path: str | None, size: str) -> str | None:
     if path.startswith("http"):
         return path
     return f"{IMAGE_BASE_URL}/{size}{path}"
+
+
+def _get_int(param: str | None, default: int, minimum: int = 1, maximum: int | None = None) -> int:
+    try:
+        value = int(param) if param is not None else default
+    except (TypeError, ValueError):
+        value = default
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(value, maximum)
+    return value
+
+
+def _summary_payload() -> dict[str, Any]:
+    movies_count = query("SELECT COUNT(*) AS cnt FROM movies")[0]["cnt"]
+    shows_count = query("SELECT COUNT(*) AS cnt FROM shows")[0]["cnt"]
+    total_items = movies_count + shows_count
+    avg_row = query("SELECT AVG(rating) AS avg FROM reviews")
+    avg_rating = float(avg_row[0]["avg"] or 0.0) if avg_row else 0.0
+    top_genres_rows = query(
+        """
+        SELECT g.name AS genre, COUNT(*) AS cnt
+        FROM movie_genres mg
+        JOIN genres g ON g.genre_id = mg.genre_id
+        GROUP BY g.genre_id
+        ORDER BY cnt DESC, g.name
+        LIMIT 10
+        """
+    )
+    top_genres = [{"genre": row["genre"], "count": row["cnt"]} for row in top_genres_rows]
+    return {
+        "total_items": total_items,
+        "movies": movies_count,
+        "tv": shows_count,
+        "avg_rating": avg_rating,
+        "top_genres": top_genres,
+        "languages": [],
+    }
+
+
+def _list_media(media_type: str, sort: str, page: int, limit: int) -> dict[str, Any]:
+    table = "movies" if media_type == "movie" else "shows"
+    id_col = "movie_id" if media_type == "movie" else "show_id"
+    release_col = "release_year" if media_type == "movie" else "first_air_date"
+    order_col = "tmdb_vote_avg"
+    offset = (page - 1) * limit
+
+    total = query(f"SELECT COUNT(*) AS cnt FROM {table}")[0]["cnt"]
+
+    rows = query(
+        f"""
+        SELECT {id_col} AS record_id,
+               tmdb_id,
+               title,
+               COALESCE(overview, '') AS overview,
+               poster_path,
+               tmdb_vote_avg,
+               {release_col} AS release_value
+        FROM {table}
+        ORDER BY ({order_col} IS NULL), {order_col} DESC, title
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
+    )
+
+    results = []
+    for row in rows:
+        data = dict(row)
+        release_value = data.get("release_value")
+        if media_type == "movie" and release_value is not None:
+            release_value = str(release_value)
+        result = {
+            "media_type": media_type,
+            "id": data["record_id"],
+            "tmdb_id": data["tmdb_id"],
+            "title": data["title"],
+            "overview": data.get("overview") or "",
+            "poster_path": data.get("poster_path"),
+            "backdrop_path": None,
+            "vote_average": data.get("tmdb_vote_avg"),
+            "release_date": release_value,
+            "genres": [],
+        }
+        results.append(result)
+
+    return {"total": total, "page": page, "results": results}
+
+
+@app.get("/api/summary")
+def summary():
+    return jsonify(_summary_payload())
+
+
+@app.get("/api/movies")
+def movies_list():
+    limit = _get_int(request.args.get("limit"), DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE)
+    page = _get_int(request.args.get("page"), 1)
+    sort = request.args.get("sort", "popularity")
+    payload = _list_media("movie", sort, page, limit)
+    return jsonify(payload)
+
+
+@app.get("/api/tv")
+def shows_list():
+    limit = _get_int(request.args.get("limit"), DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE)
+    page = _get_int(request.args.get("page"), 1)
+    sort = request.args.get("sort", "popularity")
+    payload = _list_media("show", sort, page, limit)
+    return jsonify(payload)
 
 
 @app.get("/api/trending")
