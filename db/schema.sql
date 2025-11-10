@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS movies (
     overview        TEXT,
     poster_path     TEXT,
     tmdb_vote_avg   REAL,
+    popularity      REAL,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_movies_title ON movies(title);
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS shows (
     overview        TEXT,
     poster_path     TEXT,
     tmdb_vote_avg   REAL,
+    popularity      REAL,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_shows_title ON shows(title);

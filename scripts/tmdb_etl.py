@@ -78,19 +78,21 @@ def upsert_movie(conn: sqlite3.Connection, data: dict):
         data.get("overview"),
         data.get("poster_path"),
         data.get("vote_average"),
+        data.get("popularity"),
     )
     conn.execute(
         """
         INSERT INTO movies (
-            tmdb_id, title, release_year, runtime_min, overview, poster_path, tmdb_vote_avg
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            tmdb_id, title, release_year, runtime_min, overview, poster_path, tmdb_vote_avg, popularity
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tmdb_id) DO UPDATE SET
             title = excluded.title,
             release_year = excluded.release_year,
             runtime_min = excluded.runtime_min,
             overview = excluded.overview,
             poster_path = excluded.poster_path,
-            tmdb_vote_avg = excluded.tmdb_vote_avg
+            tmdb_vote_avg = excluded.tmdb_vote_avg,
+            popularity = excluded.popularity
         """,
         params,
     )
@@ -105,19 +107,21 @@ def upsert_show(conn: sqlite3.Connection, data: dict):
         data.get("overview"),
         data.get("poster_path"),
         data.get("vote_average"),
+        data.get("popularity"),
     )
     conn.execute(
         """
         INSERT INTO shows (
-            tmdb_id, title, first_air_date, last_air_date, overview, poster_path, tmdb_vote_avg
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            tmdb_id, title, first_air_date, last_air_date, overview, poster_path, tmdb_vote_avg, popularity
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tmdb_id) DO UPDATE SET
             title = excluded.title,
             first_air_date = excluded.first_air_date,
             last_air_date = excluded.last_air_date,
             overview = excluded.overview,
             poster_path = excluded.poster_path,
-            tmdb_vote_avg = excluded.tmdb_vote_avg
+            tmdb_vote_avg = excluded.tmdb_vote_avg,
+            popularity = excluded.popularity
         """,
         params,
     )
