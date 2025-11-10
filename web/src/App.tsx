@@ -53,6 +53,9 @@ export default function App() {
   const [trendingLoading, setTrendingLoading] = useState(false)
   const [trendingError, setTrendingError] = useState<string | null>(null)
   const [carouselIndex, setCarouselIndex] = useState(0)
+  // Carousel is always locked to weekly trending
+  const [carouselSlides, setCarouselSlides] = useState<TrendingItem[]>([])
+  const [carouselLoading, setCarouselLoading] = useState(false)
   // Remember-me support: if a profile was stored and flag set, restore it.
   const [currentUser, setCurrentUser] = useState<{user:string;email:string}|null>(() => {
     try {
@@ -83,6 +86,33 @@ export default function App() {
 
   useEffect(() => { load() }, [])
 
+  // Load carousel data once (always weekly, top 5)
+  useEffect(() => {
+    let cancelled = false
+    setCarouselLoading(true)
+    ;(async () => {
+      try {
+        const results = await getTrending('weekly', 5)
+        if (!cancelled) {
+          setCarouselSlides(results)
+          setCarouselIndex(0)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setCarouselSlides([])
+        }
+      } finally {
+        if (!cancelled) {
+          setCarouselLoading(false)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Load right-rail trending based on selected period
   useEffect(() => {
     let cancelled = false
     setTrendingLoading(true)
@@ -92,7 +122,6 @@ export default function App() {
         const results = await getTrending(trendingPeriod, 40)
         if (!cancelled) {
           setTrending(results)
-          setCarouselIndex(0)
         }
       } catch (err) {
         if (!cancelled) {
@@ -111,8 +140,8 @@ export default function App() {
   }, [trendingPeriod])
 
   const heroSlides = useMemo(
-    () => trending.filter(item => item.backdrop_url || item.poster_url).slice(0, Math.min(trending.length, 5)),
-    [trending]
+    () => carouselSlides.filter(item => item.backdrop_url || item.poster_url),
+    [carouselSlides]
   )
   const activeHeroIndex = heroSlides.length > 0 ? Math.min(carouselIndex, heroSlides.length - 1) : 0
 
@@ -123,10 +152,6 @@ export default function App() {
     }
     setCarouselIndex(prev => prev % heroSlides.length)
   }, [heroSlides.length])
-
-  useEffect(() => {
-    setCarouselIndex(0)
-  }, [trendingPeriod])
 
   useEffect(() => {
     if(view !== 'app' || tab !== 'home') return
@@ -447,7 +472,9 @@ export default function App() {
   // Auth landing page (Log in / Sign Up)
   const posterFor = (path?: string | null, size: 'w185' | 'w342' | 'w500' | 'w780' = 'w185') => {
     if(!path) return undefined
-    return path.startsWith('http') ? path : `https://image.tmdb.org/t/p/${size}${path}`
+    if(path.startsWith('http')) return path
+    const normalized = path.startsWith('/') ? path : `/${path}`
+    return `https://image.tmdb.org/t/p/${size}${normalized}`
   }
 
   const backdropFor = (path?: string | null) => {
@@ -606,11 +633,11 @@ export default function App() {
 
           <div className="home-spotlight">
             <div className="trending-hero">
-              {trendingLoading ? (
+              {carouselLoading ? (
                 <div className="trending-hero-empty">Loading trending titles…</div>
               ) : heroSlides.length === 0 ? (
                 <div className="trending-hero-empty">
-                  {trendingError ?? 'Run the TMDb ETL loader to populate trending titles.'}
+                  Run the TMDb ETL loader to populate trending titles.
                 </div>
               ) : (
                 heroSlides.map((item, idx) => {

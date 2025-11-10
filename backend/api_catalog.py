@@ -19,42 +19,61 @@ MAX_TRENDING_LIMIT = 50
 MAX_PAGE_SIZE = 50
 DEFAULT_PAGE_SIZE = 20
 
-TRENDING_SQL = """
-SELECT *
-FROM (
-    SELECT 'movie' AS media_type,
-           m.movie_id AS item_id,
-           m.tmdb_id,
-           m.title,
-           COALESCE(m.overview, '') AS overview,
-           m.poster_path,
-           NULL AS backdrop_path,
-           m.tmdb_vote_avg AS score,
-           CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
-           GROUP_CONCAT(DISTINCT g.name) AS genres
-    FROM movies m
-    LEFT JOIN movie_genres mg ON mg.movie_id = m.movie_id
-    LEFT JOIN genres g ON g.genre_id = mg.genre_id
-    GROUP BY m.movie_id
-    UNION ALL
-    SELECT 'show' AS media_type,
-           s.show_id AS item_id,
-           s.tmdb_id,
-           s.title,
-           COALESCE(s.overview, '') AS overview,
-           s.poster_path,
-           NULL AS backdrop_path,
-           s.tmdb_vote_avg AS score,
-           s.first_air_date AS release_date,
-           GROUP_CONCAT(DISTINCT g.name) AS genres
-    FROM shows s
-    LEFT JOIN show_genres sg ON sg.show_id = s.show_id
-    LEFT JOIN genres g ON g.genre_id = sg.genre_id
-    GROUP BY s.show_id
-)
-ORDER BY (score IS NULL), score DESC, title
-LIMIT ?
-"""
+def _build_trending_sql(period: str) -> tuple[str, list]:
+    """Build trending SQL ordered by popularity and rating."""
+    # For now, we don't have created_at/updated_at columns for date filtering
+    # But we can still differentiate periods by varying the scoring weight
+    
+    # Weekly: prioritize popularity heavily
+    # Monthly: balance popularity and rating
+    # All: prioritize rating
+    
+    if period == "weekly":
+        order_clause = "ORDER BY (popularity IS NULL), popularity DESC, (score IS NULL), score DESC, title"
+    elif period == "monthly":
+        order_clause = "ORDER BY (popularity IS NULL), (score IS NULL), (popularity * 0.5 + score * 10) DESC, title"
+    else:  # all
+        order_clause = "ORDER BY (score IS NULL), score DESC, (popularity IS NULL), popularity DESC, title"
+    
+    sql = f"""
+    SELECT *
+    FROM (
+        SELECT 'movie' AS media_type,
+               m.movie_id AS item_id,
+               m.tmdb_id,
+               m.title,
+               COALESCE(m.overview, '') AS overview,
+               m.poster_path,
+               NULL AS backdrop_path,
+               m.tmdb_vote_avg AS score,
+               m.popularity,
+               CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
+               GROUP_CONCAT(DISTINCT g.name) AS genres
+        FROM movies m
+        LEFT JOIN movie_genres mg ON mg.movie_id = m.movie_id
+        LEFT JOIN genres g ON g.genre_id = mg.genre_id
+        GROUP BY m.movie_id
+        UNION ALL
+        SELECT 'show' AS media_type,
+               s.show_id AS item_id,
+               s.tmdb_id,
+               s.title,
+               COALESCE(s.overview, '') AS overview,
+               s.poster_path,
+               NULL AS backdrop_path,
+               s.tmdb_vote_avg AS score,
+               s.popularity,
+               s.first_air_date AS release_date,
+               GROUP_CONCAT(DISTINCT g.name) AS genres
+        FROM shows s
+        LEFT JOIN show_genres sg ON sg.show_id = s.show_id
+        LEFT JOIN genres g ON g.genre_id = sg.genre_id
+        GROUP BY s.show_id
+    )
+    {order_clause}
+    LIMIT ?
+    """
+    return sql, []
 
 
 def _tmdb_image(path: str | None, size: str) -> str | None:
@@ -62,6 +81,8 @@ def _tmdb_image(path: str | None, size: str) -> str | None:
         return None
     if path.startswith("http"):
         return path
+    if not path.startswith("/"):
+        path = f"/{path}"
     return f"{IMAGE_BASE_URL}/{size}{path}"
 
 
@@ -185,7 +206,8 @@ def trending():
         limit = base_limit
     limit = max(1, min(limit, MAX_TRENDING_LIMIT))
 
-    rows = query(TRENDING_SQL, (limit * 2,))
+    sql, params = _build_trending_sql(period)
+    rows = query(sql, (*params, limit * 2))
     results = []
     for row in rows:
         data = dict(row)

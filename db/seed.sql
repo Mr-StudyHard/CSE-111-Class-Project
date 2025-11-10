@@ -20,17 +20,17 @@ INSERT INTO genres (tmdb_genre_id, name) VALUES
   (10765, 'Sci-Fi & Fantasy');
 
 INSERT INTO movies (tmdb_id, title, release_year, runtime_min, overview, poster_path, tmdb_vote_avg) VALUES
-  (603692, 'John Wick: Recharged', 2023, 121, 'The retired hitman returns for one final reckoning.', '/wick.jpg', 7.4),
-  (550, 'Fight Club', 1999, 139, 'An insomniac office worker crosses paths with a soap maker.', '/fightclub.jpg', 8.8),
-  (157336, 'Interstellar', 2014, 169, 'A team travels through a wormhole to ensure humanity''s survival.', '/interstellar.jpg', 8.6),
-  (299536, 'Avengers: Infinity War', 2018, 149, 'Avengers unite to stop Thanos.', '/infinitywar.jpg', 8.3),
-  (27205, 'Inception', 2010, 148, 'A thief steals corporate secrets through dream-sharing tech.', '/inception.jpg', 8.8),
-  (807, 'Se7en', 1995, 127, 'Detectives hunt a serial killer inspired by the seven deadly sins.', '/seven.jpg', 8.6);
+  (603692, 'John Wick: Chapter 4', 2023, 169, 'With the price on his head ever increasing, John Wick uncovers a path to defeating The High Table.', '/vZloFAK7NmvMGKE7VkF5UHaz0I.jpg', 7.7),
+  (550, 'Fight Club', 1999, 139, 'A ticking-time-bomb insomniac and a slippery soap salesman channel primal male aggression into a shocking new form of therapy.', '/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg', 8.4),
+  (157336, 'Interstellar', 2014, 169, 'The adventures of a group of explorers who make use of a newly discovered wormhole to surpass the limitations on human space travel.', '/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg', 8.4),
+  (299536, 'Avengers: Infinity War', 2018, 149, 'As the Avengers and their allies have continued to protect the world from threats too large for any one hero to handle, a new danger has emerged from the cosmic shadows: Thanos.', '/7WsyChQLEftFiDOVTGkv3hFpyyt.jpg', 8.3),
+  (27205, 'Inception', 2010, 148, 'Cobb, a skilled thief who commits corporate espionage by infiltrating the subconscious of his targets is offered a chance to regain his old life.', '/ljsZTbVsrQSqZgWeep2B1QiDKuh.jpg', 8.4),
+  (807, 'Se7en', 1995, 127, 'Two homicide detectives are on a desperate hunt for a serial killer whose crimes are based on the seven deadly sins.', '/6yoghtyTpznpBik8EngEmJskVUO.jpg', 8.3);
 
 INSERT INTO shows (tmdb_id, title, first_air_date, last_air_date, overview, poster_path, tmdb_vote_avg) VALUES
-  (1399, 'Game of Thrones', '2011-04-17', '2019-05-19', 'Noble families vie for control of the Seven Kingdoms.', '/got.jpg', 8.4),
-  (66732, 'Stranger Things', '2016-07-15', '2024-11-01', 'A group of kids confronts supernatural forces in their town.', '/strangerthings.jpg', 8.6),
-  (82856, 'The Mandalorian', '2019-11-12', '2023-04-19', 'A bounty hunter travels the outer reaches of the galaxy.', '/mandalorian.jpg', 8.5);
+  (1399, 'Game of Thrones', '2011-04-17', '2019-05-19', 'Seven noble families fight for control of the mythical land of Westeros. Friction between the houses leads to full-scale war.', '/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg', 8.4),
+  (66732, 'Stranger Things', '2016-07-15', NULL, 'When a young boy vanishes, a small town uncovers a mystery involving secret experiments, terrifying supernatural forces, and one strange little girl.', '/x2LSRK2Cm7MZhjluni1msVJ3wDF.jpg', 8.6),
+  (82856, 'The Mandalorian', '2019-11-12', NULL, 'After the fall of the Galactic Empire, lawlessness has spread throughout the galaxy. A lone gunfighter makes his way through the outer reaches.', '/eU1i6eHXlzMOlEq0ku1Rzq7Y4wA.jpg', 8.5);
 
 -- Seasons
 INSERT INTO seasons (show_id, season_number, title, air_date) VALUES
