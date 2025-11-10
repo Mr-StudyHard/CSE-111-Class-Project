@@ -10,7 +10,7 @@ FROM (
     FROM shows
     WHERE lower(title) LIKE lower('%' || :keyword || '%')
 ) AS results
-ORDER BY tmdb_vote_avg DESC NULLS LAST, title;
+ORDER BY (tmdb_vote_avg IS NULL), tmdb_vote_avg DESC, title;
 
 -- Q2 Movie details with average user rating and TMDb average plus genres
 -- :movie_id=1

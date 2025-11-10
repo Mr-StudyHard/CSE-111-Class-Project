@@ -37,7 +37,7 @@ def search_catalog():
                first_air_date AS year_or_date
         FROM shows
         WHERE lower(title) LIKE ?
-        ORDER BY tmdb_vote_avg DESC NULLS LAST, title
+        ORDER BY (tmdb_vote_avg IS NULL), tmdb_vote_avg DESC, title
         LIMIT 50
         """,
         (like, like),

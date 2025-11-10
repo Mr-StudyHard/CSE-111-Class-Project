@@ -57,6 +57,8 @@ TMDB_API_KEY=your_tmdb_api_key_here
 ```
 Copy it to `.env` and fill in the values before running the ETL or API.
 
+For a step-by-step walkthrough (with screenshots and troubleshooting notes) see [`docs/PROJECT2_QUICKSTART.md`](docs/PROJECT2_QUICKSTART.md).
+
 ## Database Deliverables
 1. **Schema (`db/schema.sql`)** – Implements the provided ERD with raw SQL, PK/FK constraints, cascade rules, and useful indexes.
 2. **Seed (`db/seed.sql`)** – Populates users, movies, shows, seasons, episodes, genres, junction tables, people, cast, reviews, discussions, comments, and watchlists.
