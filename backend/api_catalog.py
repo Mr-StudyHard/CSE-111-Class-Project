@@ -31,7 +31,7 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
     if period == "weekly":
         order_clause = "ORDER BY popularity DESC, score DESC, title"
     elif period == "monthly":
-        order_clause = "ORDER BY (COALESCE(popularity, 0) * 0.5 + COALESCE(score, 0) * 10) DESC, title"
+        order_clause = "ORDER BY release_sort DESC, popularity DESC, score DESC, title"
     else:  # all
         order_clause = "ORDER BY score DESC, popularity DESC, title"
     
@@ -47,6 +47,7 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
                NULL AS backdrop_path,
                m.tmdb_vote_avg AS score,
                m.popularity,
+               COALESCE(m.release_year, 0) AS release_sort,
                CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
                GROUP_CONCAT(DISTINCT g.name) AS genres
         FROM movies m
@@ -63,6 +64,10 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
                NULL AS backdrop_path,
                s.tmdb_vote_avg AS score,
                s.popularity,
+               CASE
+                   WHEN s.first_air_date IS NOT NULL THEN CAST(substr(s.first_air_date, 1, 4) AS INTEGER)
+                   ELSE 0
+               END AS release_sort,
                s.first_air_date AS release_date,
                GROUP_CONCAT(DISTINCT g.name) AS genres
         FROM shows s
