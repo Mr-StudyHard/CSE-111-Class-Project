@@ -79,6 +79,43 @@ Endpoints exposed by `backend/api_catalog.py`:
 
 Run with `FLASK_APP=backend/api_catalog.py flask run`, then hit `http://127.0.0.1:5000/api/...`.
 
+### Query Coverage Checklist
+
+The 30 reference queries in `queries/use_cases.sql` break down as follows:
+
+- [x] **Q1** – Search movies and shows by title (powering `GET /api/search`)
+- [x] **Q2** – Movie details with averages & genres (used in `GET /api/movie/<id>`)
+- [x] **Q3** – Show details with season count (used in `GET /api/show/<id>`)
+- [x] **Q4** – Episode listing by season (used in `GET /api/show/<id>/seasons`)
+- [ ] **Q5** – Top movies by average user rating
+- [ ] **Q6** – Top shows by average user rating
+- [x] **Q7** – Movie genre distribution (summarised in `/api/summary`)
+- [ ] **Q8** – Show genre distribution
+- [ ] **Q9** – Titles with no user reviews
+- [ ] **Q10** – Most discussed titles (comment totals)
+- [x] **Q11** – Insert movie into watchlist (via `POST /api/watchlist`)
+- [x] **Q12** – Insert show into watchlist (via `POST /api/watchlist`)
+- [x] **Q13** – Delete watchlist entry (via `DELETE /api/watchlist`)
+- [x] **Q14** – Insert review (via `POST /api/reviews`)
+- [ ] **Q15** – Update review for movie
+- [ ] **Q16** – Delete review for movie
+- [ ] **Q17** – Create discussion for show
+- [ ] **Q18** – Insert comment into discussion
+- [ ] **Q19** – Delete empty discussions
+- [ ] **Q20** – Upsert genre (admin operation)
+- [ ] **Q21** – Upsert person by TMDb id
+- [ ] **Q22** – Attach cast to movie
+- [ ] **Q23** – Attach cast to show
+- [x] **Q24** – Top cast for movie (returned from `GET /api/movie/<id>`)
+- [x] **Q25** – Top cast for show (returned from `GET /api/show/<id>`)
+- [ ] **Q26** – Compare user vs TMDb averages per movie
+- [ ] **Q27** – Average user rating per genre
+- [ ] **Q28** – Users with ≥3 reviews
+- [ ] **Q29** – Watchlist counts per title
+- [ ] **Q30** – Recently added titles
+
+Checked entries are already exposed through the backend/UI; unchecked items remain available as future enhancements.
+
 ## Frontend
 The Vite/React app remains the same as earlier coursework. Start it with `npm run dev` inside `web/`. The dev server proxies `/api` to the Flask backend on `127.0.0.1:5000`.
 

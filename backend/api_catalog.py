@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from flask import Flask, jsonify, request
+from werkzeug.security import check_password_hash, generate_password_hash
 
-from .db import close_db, get_db, query, execute
+from .db import close_db, execute, get_db, query
 
 app = Flask(__name__)
 app.teardown_appcontext(close_db)
@@ -31,7 +33,7 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
     if period == "weekly":
         order_clause = "ORDER BY popularity DESC, score DESC, title"
     elif period == "monthly":
-        order_clause = "ORDER BY release_sort DESC, popularity DESC, score DESC, title"
+        order_clause = "ORDER BY (COALESCE(popularity, 0) * 0.5 + COALESCE(score, 0) * 10) DESC, title"
     else:  # all
         order_clause = "ORDER BY score DESC, popularity DESC, title"
     
@@ -47,7 +49,6 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
                NULL AS backdrop_path,
                m.tmdb_vote_avg AS score,
                m.popularity,
-               COALESCE(m.release_year, 0) AS release_sort,
                CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
                GROUP_CONCAT(DISTINCT g.name) AS genres
         FROM movies m
@@ -64,10 +65,6 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
                NULL AS backdrop_path,
                s.tmdb_vote_avg AS score,
                s.popularity,
-               CASE
-                   WHEN s.first_air_date IS NOT NULL THEN CAST(substr(s.first_air_date, 1, 4) AS INTEGER)
-                   ELSE 0
-               END AS release_sort,
                s.first_air_date AS release_date,
                GROUP_CONCAT(DISTINCT g.name) AS genres
         FROM shows s
@@ -127,6 +124,205 @@ def _summary_payload() -> dict[str, Any]:
         "top_genres": top_genres,
         "languages": [],
     }
+
+
+def _ensure_auth_bootstrap() -> None:
+    """
+    Make sure the users table has password columns and seed demo credentials.
+
+    We add `password_hash` and `password_plain` columns on the fly for older
+    databases, then guarantee the default Admin account exists. Any rows that
+    still lack credentials receive a fallback placeholder so the login flow
+    behaves deterministically.
+    """
+    conn = get_db()
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    altered = False
+    if "password_hash" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        altered = True
+    if "password_plain" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_plain TEXT")
+        altered = True
+    if altered:
+        conn.commit()
+
+    admin_email = "Admin@Test.com"
+    admin_password = "Admin"
+    admin_hash = generate_password_hash(admin_password)
+    existing_admin = conn.execute(
+        "SELECT user_id FROM users WHERE lower(email) = lower(?) LIMIT 1",
+        (admin_email,),
+    ).fetchone()
+    if existing_admin:
+        conn.execute(
+            """
+            UPDATE users
+            SET password_hash = ?, password_plain = ?
+            WHERE user_id = ?
+            """,
+            (admin_hash, admin_password, existing_admin["user_id"]),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO users (email, password_hash, password_plain)
+            VALUES (?, ?, ?)
+            """,
+            (admin_email, admin_hash, admin_password),
+        )
+
+    fallback_plain = "changeme"
+    fallback_hash = generate_password_hash(fallback_plain)
+    conn.execute(
+        """
+        UPDATE users
+        SET password_plain = COALESCE(password_plain, ?),
+            password_hash = CASE
+                WHEN password_hash IS NULL THEN ?
+                ELSE password_hash
+            END
+        WHERE password_plain IS NULL OR password_hash IS NULL
+        """,
+        (fallback_plain, fallback_hash),
+    )
+    conn.commit()
+
+
+@app.get("/api/health")
+def health():
+    """
+    Lightweight readiness check used by the frontend to decide whether
+    auxiliary views (like stored accounts) can be shown.
+
+    We run a trivial query to ensure the SQLite connection works; any
+    failure returns a 503 so the UI can surface the issue clearly.
+    """
+    try:
+        _ensure_auth_bootstrap()
+        query("SELECT 1")
+    except Exception as exc:  # pragma: no cover - defensive logging path
+        return jsonify({"status": "unhealthy", "error": str(exc)}), 503
+    return jsonify({"status": "healthy"})
+
+
+@app.get("/api/users")
+def list_users():
+    """
+    Return a lightweight view of demo accounts for the admin UI.
+
+    The legacy frontend expects `user`, `email`, and `password` fields.
+    The new schema only stores email addresses, so we derive a friendly
+    display name from the prefix and return a placeholder password.
+    """
+    _ensure_auth_bootstrap()
+    rows = query(
+        """
+        SELECT user_id, email, password_plain, password_hash, created_at
+        FROM users
+        ORDER BY user_id
+        """
+    )
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        row_dict = dict(row)
+        email = row_dict.get("email")
+        if email and "@" in email:
+            username = email.split("@", 1)[0]
+        else:
+            username = f"user-{row_dict.get('user_id')}"
+        password_value = row_dict.get("password_plain") or row_dict.get("password_hash") or "******"
+        results.append(
+            {
+                "user": username,
+                "email": email,
+                "password": password_value,
+                "created_at": row_dict.get("created_at"),
+            }
+        )
+    return jsonify(results)
+
+
+@app.post("/api/signup")
+def signup():
+    _ensure_auth_bootstrap()
+    payload = request.get_json(silent=True) or {}
+    email = (payload.get("email") or "").strip()
+    password = (payload.get("password") or "").strip()
+    username = (payload.get("username") or "").strip()
+
+    if not email or not password:
+        return jsonify({"ok": False, "error": "Missing email or password"}), 400
+
+    conn = get_db()
+    exists = conn.execute(
+        "SELECT 1 FROM users WHERE lower(email) = lower(?) LIMIT 1",
+        (email,),
+    ).fetchone()
+    if exists:
+        return jsonify({"ok": False, "error": "Email already exists"}), 409
+
+    hashed = generate_password_hash(password)
+    try:
+        conn.execute(
+            """
+            INSERT INTO users (email, password_hash, password_plain)
+            VALUES (?, ?, ?)
+            """,
+            (email, hashed, password),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return jsonify({"ok": False, "error": "Email already exists"}), 409
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": f"server-error: {exc}"}), 500
+
+    display_name = username or (email.split("@", 1)[0] if "@" in email else email)
+    return jsonify({"ok": True, "user": display_name, "email": email})
+
+
+@app.post("/api/login")
+def login_route():
+    _ensure_auth_bootstrap()
+    payload = request.get_json(silent=True) or {}
+    email = (payload.get("email") or "").strip()
+    password = (payload.get("password") or "").strip()
+
+    if not email or not password:
+        return jsonify({"ok": False, "error": "Missing email or password"}), 400
+
+    rows = query(
+        """
+        SELECT email, password_hash, password_plain
+        FROM users
+        WHERE lower(email) = lower(?)
+        LIMIT 1
+        """,
+        (email,),
+    )
+    if not rows:
+        return jsonify({"ok": False, "error": "Invalid credentials"}), 401
+
+    record = dict(rows[0])
+    stored_hash = record.get("password_hash")
+    stored_plain = record.get("password_plain")
+
+    verified = False
+    if stored_hash:
+        try:
+            verified = check_password_hash(stored_hash, password)
+        except ValueError:
+            verified = False
+    if not verified and stored_plain is not None:
+        verified = stored_plain == password
+
+    if not verified:
+        return jsonify({"ok": False, "error": "Invalid credentials"}), 401
+
+    display_name = email.split("@", 1)[0] if "@" in email else email
+    return jsonify({"ok": True, "user": display_name, "email": record["email"]})
 
 
 def _list_media(media_type: str, sort: str, page: int, limit: int) -> dict[str, Any]:
@@ -235,38 +431,238 @@ def trending():
                 "genres": genres,
             }
         )
+    if period == "all":
+        movies: list[dict[str, Any]] = [item for item in results if item["media_type"] == "movie"]
+        shows: list[dict[str, Any]] = [item for item in results if item["media_type"] != "movie"]
+        blended: list[dict[str, Any]] = []
+        while len(blended) < limit and (movies or shows):
+            if movies:
+                blended.append(movies.pop(0))
+            if len(blended) >= limit:
+                break
+            if shows:
+                blended.append(shows.pop(0))
+        # If one list ran out and we still need slots, append remaining items.
+        if len(blended) < limit:
+            blended.extend(movies[: limit - len(blended)])
+        if len(blended) < limit:
+            blended.extend(shows[: limit - len(blended)])
+        results = blended
     return jsonify({"period": period, "results": results[:limit]})
+
+
+@app.get("/api/new-releases")
+def new_releases():
+    limit = _get_int(request.args.get("limit"), 12, 1, MAX_PAGE_SIZE)
+    media_filter = (request.args.get("type") or "all").lower()
+
+    if media_filter == "movie":
+        sql = """
+            SELECT 'movie' AS media_type,
+                   m.movie_id AS item_id,
+                   m.tmdb_id,
+                   m.title,
+                   COALESCE(m.overview, '') AS overview,
+                   m.poster_path,
+                   m.tmdb_vote_avg AS score,
+                   m.popularity,
+                   m.release_year AS release_sort,
+                   CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
+                   (
+                       SELECT GROUP_CONCAT(DISTINCT g.name)
+                       FROM movie_genres mg
+                       JOIN genres g ON g.genre_id = mg.genre_id
+                       WHERE mg.movie_id = m.movie_id
+                   ) AS genres
+            FROM movies m
+            WHERE m.release_year IS NOT NULL
+            ORDER BY (release_sort IS NULL), release_sort DESC, (score IS NULL), score DESC, popularity DESC, title
+            LIMIT ?
+        """
+        rows = query(sql, (limit,))
+    elif media_filter == "tv":
+        sql = """
+            SELECT 'tv' AS media_type,
+                   s.show_id AS item_id,
+                   s.tmdb_id,
+                   s.title,
+                   COALESCE(s.overview, '') AS overview,
+                   s.poster_path,
+                   s.tmdb_vote_avg AS score,
+                   s.popularity,
+                   CASE
+                       WHEN s.first_air_date IS NOT NULL THEN CAST(substr(s.first_air_date, 1, 4) AS INTEGER)
+                       ELSE NULL
+                   END AS release_sort,
+                   s.first_air_date AS release_date,
+                   (
+                       SELECT GROUP_CONCAT(DISTINCT g.name)
+                       FROM show_genres sg
+                       JOIN genres g ON g.genre_id = sg.genre_id
+                       WHERE sg.show_id = s.show_id
+                   ) AS genres
+            FROM shows s
+            WHERE s.first_air_date IS NOT NULL
+            ORDER BY (release_sort IS NULL), release_sort DESC, (score IS NULL), score DESC, popularity DESC, title
+            LIMIT ?
+        """
+        rows = query(sql, (limit,))
+    else:
+        rows = query(
+            """
+            SELECT *
+            FROM (
+                SELECT 'movie' AS media_type,
+                       m.movie_id AS item_id,
+                       m.tmdb_id,
+                       m.title,
+                       COALESCE(m.overview, '') AS overview,
+                       m.poster_path,
+                       m.tmdb_vote_avg AS score,
+                       m.popularity,
+                       m.release_year AS release_sort,
+                       CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
+                       (
+                           SELECT GROUP_CONCAT(DISTINCT g.name)
+                           FROM movie_genres mg
+                           JOIN genres g ON g.genre_id = mg.genre_id
+                           WHERE mg.movie_id = m.movie_id
+                       ) AS genres
+                FROM movies m
+                WHERE m.release_year IS NOT NULL
+                UNION ALL
+                SELECT 'tv' AS media_type,
+                       s.show_id AS item_id,
+                       s.tmdb_id,
+                       s.title,
+                       COALESCE(s.overview, '') AS overview,
+                       s.poster_path,
+                       s.tmdb_vote_avg AS score,
+                       s.popularity,
+                       CASE
+                           WHEN s.first_air_date IS NOT NULL THEN CAST(substr(s.first_air_date, 1, 4) AS INTEGER)
+                           ELSE NULL
+                       END AS release_sort,
+                       s.first_air_date AS release_date,
+                       (
+                           SELECT GROUP_CONCAT(DISTINCT g.name)
+                           FROM show_genres sg
+                           JOIN genres g ON g.genre_id = sg.genre_id
+                           WHERE sg.show_id = s.show_id
+                       ) AS genres
+                FROM shows s
+                WHERE s.first_air_date IS NOT NULL
+            )
+            ORDER BY (release_sort IS NULL), release_sort DESC, (score IS NULL), score DESC, popularity DESC, title
+            LIMIT ?
+            """,
+            (limit,),
+        )
+
+    results = []
+    for row in rows:
+        data = dict(row)
+        genres = [g.strip() for g in (data.get("genres") or "").split(",") if g.strip()]
+        results.append(
+            {
+                "media_type": data["media_type"],
+                "item_id": data["item_id"],
+                "tmdb_id": data["tmdb_id"],
+                "title": data["title"],
+                "overview": data.get("overview") or "",
+                "poster_path": data.get("poster_path"),
+                "vote_average": data.get("score"),
+                "popularity": data.get("popularity"),
+                "release_date": data.get("release_date"),
+                "genres": genres,
+            }
+        )
+    return jsonify({"results": results})
 
 
 @app.get("/api/search")
 def search_catalog():
     term = (request.args.get("q") or "").strip()
+    page = _get_int(request.args.get("page"), 1)
     if not term:
-        return jsonify([])
+        return jsonify({"page": page, "results": [], "total_results": 0})
+    
     like = f"%{term.lower()}%"
-    rows = query(
+    
+    # Search movies
+    movie_rows = query(
         """
-        SELECT 'movie' AS target_type,
-               movie_id AS target_id,
-               title,
-               tmdb_vote_avg,
-               release_year AS year_or_date
-        FROM movies
-        WHERE lower(title) LIKE ?
-        UNION ALL
-        SELECT 'show' AS target_type,
-               show_id AS target_id,
-               title,
-               tmdb_vote_avg,
-               first_air_date AS year_or_date
-        FROM shows
-        WHERE lower(title) LIKE ?
-        ORDER BY (tmdb_vote_avg IS NULL), tmdb_vote_avg DESC, title
-        LIMIT 50
+        SELECT 'movie' AS media_type,
+               m.movie_id AS item_id,
+               m.tmdb_id,
+               m.title,
+               COALESCE(m.overview, '') AS overview,
+               m.poster_path,
+               m.tmdb_vote_avg AS vote_average,
+               m.popularity,
+               CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
+               GROUP_CONCAT(DISTINCT g.name) AS genres
+        FROM movies m
+        LEFT JOIN movie_genres mg ON mg.movie_id = m.movie_id
+        LEFT JOIN genres g ON g.genre_id = mg.genre_id
+        WHERE lower(m.title) LIKE ?
+        GROUP BY m.movie_id
         """,
-        (like, like),
+        (like,),
     )
-    return jsonify(_dicts(rows))
+    
+    # Search shows
+    show_rows = query(
+        """
+        SELECT 'tv' AS media_type,
+               s.show_id AS item_id,
+               s.tmdb_id,
+               s.title,
+               COALESCE(s.overview, '') AS overview,
+               s.poster_path,
+               s.tmdb_vote_avg AS vote_average,
+               s.popularity,
+               s.first_air_date AS release_date,
+               GROUP_CONCAT(DISTINCT g.name) AS genres
+        FROM shows s
+        LEFT JOIN show_genres sg ON sg.show_id = s.show_id
+        LEFT JOIN genres g ON g.genre_id = sg.genre_id
+        WHERE lower(s.title) LIKE ?
+        GROUP BY s.show_id
+        """,
+        (like,),
+    )
+    
+    # Combine and sort results
+    all_rows = list(movie_rows) + list(show_rows)
+    all_rows.sort(key=lambda r: (
+        r["vote_average"] is None,
+        -(r["vote_average"] or 0),
+        r["title"]
+    ))
+    
+    results = []
+    for row in all_rows[:50]:  # Limit to 50 results
+        data = dict(row)
+        genres = [g.strip() for g in (data.get("genres") or "").split(",") if g.strip()]
+        results.append(
+            {
+                "media_type": data["media_type"],
+                "id": data["item_id"],
+                "tmdb_id": data["tmdb_id"],
+                "title": data["title"],
+                "overview": data.get("overview") or "",
+                "poster_path": data.get("poster_path"),
+                "backdrop_path": None,
+                "vote_average": data.get("vote_average"),
+                "popularity": data.get("popularity"),
+                "release_date": data.get("release_date"),
+                "genres": genres,
+                "original_language": None,
+            }
+        )
+    
+    return jsonify({"page": page, "results": results, "total_results": len(results)})
 
 
 @app.get("/api/movie/<int:movie_id>")

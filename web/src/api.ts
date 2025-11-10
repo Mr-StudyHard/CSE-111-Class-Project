@@ -82,6 +82,11 @@ export async function getTrending(period: 'weekly' | 'monthly' | 'all' = 'weekly
 	return (data?.results ?? []) as TrendingItem[]
 }
 
+export async function getNewReleases(limit = 12, type: 'all' | 'movie' | 'tv' = 'all') {
+	const { data } = await api.get('/new-releases', { params: { limit, type } })
+	return (data?.results ?? []) as MediaItem[]
+}
+
 export type LoginResponse = { ok: true; user: string; email: string } | { ok: false; error: string }
 
 export async function login(email: string, password: string) {

@@ -1,27 +1,32 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases } from './api'
 
 type Tab = 'home' | 'analytics' | 'movies' | 'tv' | 'search'
 type View = 'app' | 'auth' | 'login' | 'signup' | 'accounts'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
+type ReleaseFilter = 'all' | 'movie' | 'tv'
 
-function Stat({label, value}:{label:string;value:React.ReactNode}){
-  return (
-    <div className="stat">
-      <div className="stat-value">{value}</div>
-      <div className="stat-label">{label}</div>
-    </div>
-  )
+const ADULT_KEYWORDS = /(erotic|erotica|adult|porn|pornographic|xxx|nsfw)/i
+const isAdultShow = (item: { media_type?: string; genres?: string[]; title?: string }) => {
+  const type = item.media_type?.toLowerCase()
+  if(type !== 'tv' && type !== 'show') return false
+  if(item.genres?.some(g => ADULT_KEYWORDS.test(g))) return true
+  if(item.title && ADULT_KEYWORDS.test(item.title)) return true
+  return false
 }
 
 function Card({item}:{item:MediaItem}){
   const img = item.poster_path ? `https://image.tmdb.org/t/p/w300${item.poster_path}` : undefined
+  const adult = isAdultShow(item)
   return (
-    <div className="card">
-      {img ? <img src={img} alt={item.title} loading="lazy"/> : <div className="noimg">No image</div>}
+    <div className={`card${adult ? ' card-adult' : ''}`}>
+      <div className="card-media">
+        {img ? <img src={img} alt={item.title} loading="lazy"/> : <div className="noimg">No image</div>}
+        {adult && <div className="card-adult-overlay"><span className="card-adult-badge">18+</span><span>Adult content hidden</span></div>}
+      </div>
       <div className="card-body">
-        <div className="chip">{item.media_type.toUpperCase()}</div>
+        <div className="chip">{item.media_type?.toUpperCase()}</div>
         <h4 title={item.title}>{item.title}</h4>
         <div className="meta">
           <span>⭐ {item.vote_average?.toFixed?.(1) ?? '–'}</span>
@@ -29,6 +34,15 @@ function Card({item}:{item:MediaItem}){
           <span>📅 {item.release_date ?? '—'}</span>
         </div>
       </div>
+    </div>
+  )
+}
+
+function Stat({label, value}:{label:string;value:React.ReactNode}){
+  return (
+    <div className="stat">
+      <div className="stat-value">{value}</div>
+      <div className="stat-label">{label}</div>
     </div>
   )
 }
@@ -56,18 +70,36 @@ export default function App() {
   // Carousel is always locked to weekly trending
   const [carouselSlides, setCarouselSlides] = useState<TrendingItem[]>([])
   const [carouselLoading, setCarouselLoading] = useState(false)
+  const [newReleases, setNewReleases] = useState<MediaItem[]>([])
+  const [newReleasesLoading, setNewReleasesLoading] = useState(false)
+  const [newReleasesError, setNewReleasesError] = useState<string | null>(null)
+  const [newReleaseFilter, setNewReleaseFilter] = useState<ReleaseFilter>('all')
   // Remember-me support: if a profile was stored and flag set, restore it.
   const [currentUser, setCurrentUser] = useState<{user:string;email:string}|null>(() => {
+    try {
+      const rawSession = sessionStorage.getItem('currentUser')
+      if(rawSession){
+        return JSON.parse(rawSession)
+      }
+    } catch {}
     try {
       const flag = localStorage.getItem('rememberUser') === '1'
       if(!flag) return null
       const raw = localStorage.getItem('currentUser')
       return raw? JSON.parse(raw) : null
     } catch { return null }
+    return null
   })
   const [remember, setRemember] = useState<boolean>(() => localStorage.getItem('rememberUser') === '1')
   const [loginError, setLoginError] = useState<string | null>(null)
   const [signupError, setSignupError] = useState<string | null>(null)
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const primaryNav: Array<{ id: Exclude<Tab, 'search'>; label: string }> = [
+    { id: 'analytics', label: 'Analytics' },
+    { id: 'movies', label: 'Movies' },
+    { id: 'tv', label: 'TV' },
+  ]
 
   // Always prefill Admin creds when opening the login view
   useEffect(() => {
@@ -84,7 +116,43 @@ export default function App() {
     }
   }, [view])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    if(!mobileSearchOpen) return
+    searchInputRef.current?.focus()
+  }, [mobileSearchOpen])
+
+  useEffect(() => {
+    if(typeof window === 'undefined') return
+    const mq = window.matchMedia('(min-width: 640px)')
+    const handler = () => setMobileSearchOpen(false)
+    handler()
+    if(mq.addEventListener){
+      mq.addEventListener('change', handler)
+    } else {
+      mq.addListener(handler)
+    }
+    return () => {
+      if(mq.removeEventListener){
+        mq.removeEventListener('change', handler)
+      } else {
+        mq.removeListener(handler)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if(view !== 'app'){
+      setMobileSearchOpen(false)
+    }
+  }, [view])
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  useEffect(() => {
+    loadNewReleases()
+  }, [newReleaseFilter])
 
   // Load carousel data once (always weekly, top 5)
   useEffect(() => {
@@ -119,7 +187,7 @@ export default function App() {
     setTrendingError(null)
     ;(async () => {
       try {
-        const results = await getTrending(trendingPeriod, 40)
+        const results = await getTrending(trendingPeriod, 10)
         if (!cancelled) {
           setTrending(results)
         }
@@ -178,9 +246,29 @@ export default function App() {
     }
   }
 
+  async function loadNewReleases(limit = 12, filter: ReleaseFilter = newReleaseFilter){
+    setNewReleasesLoading(true)
+    setNewReleasesError(null)
+    try {
+      const items = await getNewReleases(limit, filter)
+      setNewReleases(items)
+    } catch (err) {
+      console.error('Failed to load new releases', err)
+      setNewReleases([])
+      setNewReleasesError('Unable to load new releases at the moment.')
+    } finally {
+      setNewReleasesLoading(false)
+    }
+  }
+
   async function onRefresh(){
     setBusy(true)
-    try{ await refresh(1); await load() } finally { setBusy(false) }
+    try{
+      await refresh(1)
+      await Promise.all([load(), loadNewReleases(undefined, newReleaseFilter)])
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function onSearch(ev: React.FormEvent){
@@ -189,6 +277,7 @@ export default function App() {
     setBusy(true)
     try{ const d = await search(q.trim()); setResults(d.results) } finally { setBusy(false) }
     setTab('search')
+    setMobileSearchOpen(false)
   }
 
   // Lazy-load accounts only when the view is opened
@@ -226,6 +315,9 @@ export default function App() {
         if(res.ok){
           const profile = { user: (res as any).user, email: (res as any).email }
           setCurrentUser(profile)
+          try {
+            sessionStorage.setItem('currentUser', JSON.stringify(profile))
+          } catch {}
           if(remember){
             try {
               localStorage.setItem('currentUser', JSON.stringify(profile))
@@ -458,7 +550,7 @@ export default function App() {
              <div className="auth-card-footer">
                <p>Already have an account? <button className="link-button" onClick={()=> { 
                  setCurrentUser(null);
-                 try { localStorage.removeItem('currentUser'); localStorage.removeItem('rememberUser') } catch {}
+                try { sessionStorage.removeItem('currentUser'); localStorage.removeItem('currentUser'); localStorage.removeItem('rememberUser') } catch {}
                  setView('login');
                }}>Sign in</button></p>
                <button className="back-link-button" onClick={()=>setView('app')}>← Back to app</button>
@@ -576,34 +668,69 @@ export default function App() {
 
   return (
     <div className="container">
-      <header className="header">
-        <div className="brand"><span>Movie & TV Analytics</span>{currentUser && <span className="chip user-chip-blue brand-user-chip">User: {currentUser.user}</span>}</div>
-        <nav className="nav">
-          <div className="nav-left">
-            <button className={tab==='home'? 'active':''} onClick={()=>setTab('home')}>Home</button>
+      <header className={`header ${mobileSearchOpen ? 'header-mobile-search' : ''}`}>
+        <div className="header-left">
+          <div className="brand-group">
+            <button type="button" className="brand-link" onClick={()=>{ setView('app'); setTab('home'); }}>
+              Movie &amp; TV Analytics
+            </button>
           </div>
-          <button className={tab==='analytics'? 'active':''} onClick={()=>setTab('analytics')}>Analytics</button>
-          <button className={tab==='movies'? 'active':''} onClick={()=>setTab('movies')}>Movies</button>
-          <button className={tab==='tv'? 'active':''} onClick={()=>setTab('tv')}>TV</button>
-        </nav>
-        <form className="search" onSubmit={onSearch}>
-          <input placeholder="Search TMDb…" value={q} onChange={e=>setQ(e.target.value)} />
-          <button type="submit">Search</button>
-          {!currentUser ? (
-            <>
-              <button type="button" onClick={()=>setView('login')}>Log In</button>
-              <button type="button" onClick={()=>setView('signup')}>Sign Up</button>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={()=>{ 
-                setCurrentUser(null);
-                try { localStorage.removeItem('currentUser'); localStorage.removeItem('rememberUser') } catch {}
-              }}
-            >Log Out</button>
-          )}
-        </form>
+          <form className={`header-search ${mobileSearchOpen ? 'show' : ''}`} onSubmit={onSearch}>
+            <span className="search-icon" aria-hidden="true">🔍</span>
+            <input
+              ref={searchInputRef}
+              placeholder="Search TMDb…"
+              value={q}
+              onChange={e=>setQ(e.target.value)}
+              autoComplete="off"
+            />
+            <button type="submit" className="search-submit">Search</button>
+          </form>
+          <button
+            type="button"
+            className="search-toggle"
+            aria-label="Toggle search"
+            aria-expanded={mobileSearchOpen}
+            onClick={()=>setMobileSearchOpen(prev => !prev)}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <circle cx="11" cy="11" r="6" />
+              <line x1="15.5" y1="15.5" x2="21" y2="21" />
+            </svg>
+          </button>
+        </div>
+        <div className="header-right">
+          <nav className="header-nav" aria-label="Primary navigation">
+            {primaryNav.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={()=>setTab(item.id)}
+                aria-current={tab === item.id ? 'page' : undefined}
+                className={`nav-pill ${tab === item.id ? 'active' : ''}`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="header-actions">
+            {currentUser && <span className="chip user-chip-blue header-user">User: {currentUser.user}</span>}
+            {!currentUser ? (
+              <button type="button" className="btn-outline header-auth" onClick={()=>setView('login')}>Log In</button>
+            ) : (
+              <button
+                type="button"
+                className="btn-outline header-auth"
+                onClick={()=>{ 
+                  setCurrentUser(null);
+                  try { sessionStorage.removeItem('currentUser'); localStorage.removeItem('currentUser'); localStorage.removeItem('rememberUser') } catch {}
+                }}
+              >
+                Log Out
+              </button>
+            )}
+          </div>
+        </div>
       </header>
       {tab==='home' && (
         <section className="hero">
@@ -648,10 +775,11 @@ export default function App() {
                       ? `${item.overview.slice(0, 217)}…`
                       : item.overview
                   const rating = item.tmdb_vote_avg
+                  const adult = isAdultShow(item)
                   return (
                     <div
                       key={`hero-${item.media_type}-${item.tmdb_id}-${idx}`}
-                      className={`trending-hero-slide ${isActive ? 'active' : ''}`}
+                      className={`trending-hero-slide${isActive ? ' active' : ''}${adult ? ' adult-slide' : ''}`}
                     >
                       <div
                         className="trending-hero-backdrop"
@@ -659,9 +787,10 @@ export default function App() {
                       />
                       <div className="trending-hero-overlay" />
                       <div className="trending-hero-content">
+                        {adult && <div className="adult-content-banner">Adult content hidden</div>}
                         <div className="trending-hero-pill">{item.media_type === 'movie' ? 'Movie' : 'TV Series'}</div>
                         <h2>{item.title}</h2>
-                        <p>{overview || 'No synopsis available just yet.'}</p>
+                        <p>{adult ? 'Adult synopsis hidden.' : overview || 'No synopsis available just yet.'}</p>
                         <div className="trending-hero-meta">
                           <span>⭐ {rating != null ? rating.toFixed(1) : '—'}</span>
                           {item.release_date && <span>📅 {item.release_date}</span>}
@@ -681,7 +810,7 @@ export default function App() {
                     onClick={() => setCarouselIndex(prev => (prev - 1 + heroSlides.length) % heroSlides.length)}
                     aria-label="Previous slide"
                   >
-                    ‹
+                    <span className="trending-hero-nav-icon">‹</span>
                   </button>
                   <button
                     type="button"
@@ -689,7 +818,7 @@ export default function App() {
                     onClick={() => setCarouselIndex(prev => (prev + 1) % heroSlides.length)}
                     aria-label="Next slide"
                   >
-                    ›
+                    <span className="trending-hero-nav-icon">›</span>
                   </button>
                   <div className="trending-hero-dots">
                     {heroSlides.map((_, idx) => (
@@ -709,8 +838,7 @@ export default function App() {
             <aside className="trending-rail">
               <div className="trending-rail-header">
                 <div>
-                  <h3>Popular &amp; Trending</h3>
-                  <p>Powered by the latest titles ingested from TMDb.</p>
+                  <h3>Popular</h3>
                 </div>
                 <div className="trending-rail-tabs">
                   {(['weekly', 'monthly', 'all'] as TrendingPeriod[]).map(period => (
@@ -726,7 +854,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="trending-rail-list">
+              <div className="trending-rail-list" key={`trending-${trendingPeriod}`}>
                 {trendingLoading && (
                   <div className="trending-rail-empty">Loading leaderboard…</div>
                 )}
@@ -738,11 +866,13 @@ export default function App() {
                 {!trendingLoading && trending.map((item, index) => {
                   const poster = posterFor(item.poster_url, 'w185')
                   const genres = item.genres.length > 0 ? item.genres.slice(0, 2).join(' • ') : '—'
+                  const adult = isAdultShow(item)
                   return (
                     <div key={`leaderboard-${item.media_type}-${item.tmdb_id}-${index}`} className="trending-rail-item">
                       <div className="rank">{index + 1}</div>
-                      <div className="thumb">
+                      <div className={`thumb${adult ? ' thumb-adult' : ''}`}>
                         {poster ? <img src={poster} alt={item.title} loading="lazy" /> : <div className="thumb-placeholder">🎬</div>}
+                        {adult && <div className="thumb-adult-overlay">18+</div>}
                       </div>
                       <div className="details">
                         <div className="title" title={item.title}>{item.title}</div>
@@ -750,13 +880,71 @@ export default function App() {
                           <span>{item.media_type === 'movie' ? 'Movie' : 'TV'}</span>
                           <span>⭐ {item.tmdb_vote_avg != null ? item.tmdb_vote_avg.toFixed(1) : '—'}</span>
                         </div>
-                        <div className="genres">{genres}</div>
+                        <div className="genres">{adult ? 'Restricted content' : genres}</div>
                       </div>
                     </div>
                   )
                 })}
               </div>
             </aside>
+          </div>
+
+          <div className="new-release-section">
+            <div className="new-release-header">
+              <div>
+                <h3>New Releases</h3>
+                <p>Fresh arrivals from {new Date().getFullYear()}.</p>
+              </div>
+              <div className="new-release-actions">
+                <div className="new-release-tabs">
+                  {(['all', 'movie', 'tv'] as ReleaseFilter[]).map(option => (
+                    <button
+                      key={option}
+                      type="button"
+                      className={option === newReleaseFilter ? 'active' : ''}
+                      onClick={() => setNewReleaseFilter(option)}
+                      disabled={newReleasesLoading && option === newReleaseFilter}
+                    >
+                      {option === 'all' ? 'All' : option === 'movie' ? 'Movies' : 'TV Shows'}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="btn-text"
+                  onClick={() => loadNewReleases(20, newReleaseFilter)}
+                  disabled={newReleasesLoading}
+                >
+                  {newReleasesLoading ? 'Refreshing…' : 'Refresh list'}
+                </button>
+              </div>
+            </div>
+
+            {newReleasesLoading && newReleases.length === 0 && (
+              <div className="new-release-empty">Loading new releases…</div>
+            )}
+            {!newReleasesLoading && newReleasesError && (
+              <div className="new-release-empty">{newReleasesError}</div>
+            )}
+            {!newReleasesLoading &&
+              !newReleasesError &&
+              newReleases.length === 0 && (
+                <div className="new-release-empty">
+                  No new releases found. Try running the ETL loader.
+                </div>
+              )}
+            {newReleases.length > 0 && (
+              <div className="new-release-grid-wrapper">
+                <div className="new-release-grid" key={`new-release-${newReleaseFilter}`}>
+                  {newReleases.map(item => (
+                    <Card key={`nr-${item.media_type}-${item.tmdb_id}`} item={item} />
+                  ))}
+                </div>
+                {newReleasesLoading && (
+                  <div className="list-overlay">Refreshing…</div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Footer removed per design update */}
@@ -814,8 +1002,14 @@ export default function App() {
 
       {tab==='search' && (
         <section>
-          <h3>Search Results</h3>
-          <div className="grid">{results.map(m => <Card key={`s-${m.media_type}-${m.tmdb_id}`} item={m} />)}</div>
+          <h3>Search Results{q ? ` for "${q}"` : ''}</h3>
+          {results.length === 0 && !busy ? (
+            <div style={{textAlign:'center', padding:'48px 24px', color:'var(--muted)'}}>
+              No results found. Try a different search term.
+            </div>
+          ) : (
+            <div className="grid">{results.map(m => <Card key={`s-${m.media_type}-${m.tmdb_id}`} item={m} />)}</div>
+          )}
         </section>
       )}
 
