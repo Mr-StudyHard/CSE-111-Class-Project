@@ -44,7 +44,7 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
                m.movie_id AS item_id,
                m.tmdb_id,
                m.title,
-               COALESCE(m.overview, '') AS overview,
+               m.overview,
                m.poster_path,
                NULL AS backdrop_path,
                m.tmdb_vote_avg AS score,
@@ -52,15 +52,16 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
                CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
                GROUP_CONCAT(DISTINCT g.name) AS genres
         FROM movies m
-        LEFT JOIN movie_genres mg ON mg.movie_id = m.movie_id
-        LEFT JOIN genres g ON g.genre_id = mg.genre_id
+        INNER JOIN movie_genres mg ON mg.movie_id = m.movie_id
+        INNER JOIN genres g ON g.genre_id = mg.genre_id
+        WHERE m.overview IS NOT NULL AND m.overview != ''
         GROUP BY m.movie_id
         UNION ALL
         SELECT 'show' AS media_type,
                s.show_id AS item_id,
                s.tmdb_id,
                s.title,
-               COALESCE(s.overview, '') AS overview,
+               s.overview,
                s.poster_path,
                NULL AS backdrop_path,
                s.tmdb_vote_avg AS score,
@@ -68,8 +69,9 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
                s.first_air_date AS release_date,
                GROUP_CONCAT(DISTINCT g.name) AS genres
         FROM shows s
-        LEFT JOIN show_genres sg ON sg.show_id = s.show_id
-        LEFT JOIN genres g ON g.genre_id = sg.genre_id
+        INNER JOIN show_genres sg ON sg.show_id = s.show_id
+        INNER JOIN genres g ON g.genre_id = sg.genre_id
+        WHERE s.overview IS NOT NULL AND s.overview != ''
         GROUP BY s.show_id
     )
     {order_clause}
@@ -331,20 +333,30 @@ def _list_media(media_type: str, sort: str, page: int, limit: int) -> dict[str, 
     release_col = "release_year" if media_type == "movie" else "first_air_date"
     order_col = "tmdb_vote_avg"
     offset = (page - 1) * limit
+    genre_table = "movie_genres" if media_type == "movie" else "show_genres"
 
-    total = query(f"SELECT COUNT(*) AS cnt FROM {table}")[0]["cnt"]
+    # Count only items with overview AND at least one genre
+    total_sql = f"""
+        SELECT COUNT(DISTINCT t.{id_col}) AS cnt 
+        FROM {table} t
+        INNER JOIN {genre_table} gt ON t.{id_col} = gt.{id_col}
+        WHERE t.overview IS NOT NULL AND t.overview != ''
+    """
+    total = query(total_sql)[0]["cnt"]
 
     rows = query(
         f"""
-        SELECT {id_col} AS record_id,
-               tmdb_id,
-               title,
-               COALESCE(overview, '') AS overview,
-               poster_path,
-               tmdb_vote_avg,
-               {release_col} AS release_value
-        FROM {table}
-        ORDER BY ({order_col} IS NULL), {order_col} DESC, title
+        SELECT DISTINCT t.{id_col} AS record_id,
+               t.tmdb_id,
+               t.title,
+               t.overview,
+               t.poster_path,
+               t.tmdb_vote_avg,
+               t.{release_col} AS release_value
+        FROM {table} t
+        INNER JOIN {genre_table} gt ON t.{id_col} = gt.{id_col}
+        WHERE t.overview IS NOT NULL AND t.overview != ''
+        ORDER BY (t.{order_col} IS NULL), t.{order_col} DESC, t.title
         LIMIT ? OFFSET ?
         """,
         (limit, offset),
@@ -462,20 +474,18 @@ def new_releases():
                    m.movie_id AS item_id,
                    m.tmdb_id,
                    m.title,
-                   COALESCE(m.overview, '') AS overview,
+                   m.overview,
                    m.poster_path,
                    m.tmdb_vote_avg AS score,
                    m.popularity,
                    m.release_year AS release_sort,
                    CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
-                   (
-                       SELECT GROUP_CONCAT(DISTINCT g.name)
-                       FROM movie_genres mg
-                       JOIN genres g ON g.genre_id = mg.genre_id
-                       WHERE mg.movie_id = m.movie_id
-                   ) AS genres
+                   GROUP_CONCAT(DISTINCT g.name) AS genres
             FROM movies m
-            WHERE m.release_year IS NOT NULL
+            INNER JOIN movie_genres mg ON mg.movie_id = m.movie_id
+            INNER JOIN genres g ON g.genre_id = mg.genre_id
+            WHERE m.release_year IS NOT NULL AND m.overview IS NOT NULL AND m.overview != ''
+            GROUP BY m.movie_id
             ORDER BY (release_sort IS NULL), release_sort DESC, (score IS NULL), score DESC, popularity DESC, title
             LIMIT ?
         """
@@ -486,7 +496,7 @@ def new_releases():
                    s.show_id AS item_id,
                    s.tmdb_id,
                    s.title,
-                   COALESCE(s.overview, '') AS overview,
+                   s.overview,
                    s.poster_path,
                    s.tmdb_vote_avg AS score,
                    s.popularity,
@@ -495,14 +505,12 @@ def new_releases():
                        ELSE NULL
                    END AS release_sort,
                    s.first_air_date AS release_date,
-                   (
-                       SELECT GROUP_CONCAT(DISTINCT g.name)
-                       FROM show_genres sg
-                       JOIN genres g ON g.genre_id = sg.genre_id
-                       WHERE sg.show_id = s.show_id
-                   ) AS genres
+                   GROUP_CONCAT(DISTINCT g.name) AS genres
             FROM shows s
-            WHERE s.first_air_date IS NOT NULL
+            INNER JOIN show_genres sg ON sg.show_id = s.show_id
+            INNER JOIN genres g ON g.genre_id = sg.genre_id
+            WHERE s.first_air_date IS NOT NULL AND s.overview IS NOT NULL AND s.overview != ''
+            GROUP BY s.show_id
             ORDER BY (release_sort IS NULL), release_sort DESC, (score IS NULL), score DESC, popularity DESC, title
             LIMIT ?
         """
@@ -516,26 +524,24 @@ def new_releases():
                        m.movie_id AS item_id,
                        m.tmdb_id,
                        m.title,
-                       COALESCE(m.overview, '') AS overview,
+                       m.overview,
                        m.poster_path,
                        m.tmdb_vote_avg AS score,
                        m.popularity,
                        m.release_year AS release_sort,
                        CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
-                       (
-                           SELECT GROUP_CONCAT(DISTINCT g.name)
-                           FROM movie_genres mg
-                           JOIN genres g ON g.genre_id = mg.genre_id
-                           WHERE mg.movie_id = m.movie_id
-                       ) AS genres
+                       GROUP_CONCAT(DISTINCT g.name) AS genres
                 FROM movies m
-                WHERE m.release_year IS NOT NULL
+                INNER JOIN movie_genres mg ON mg.movie_id = m.movie_id
+                INNER JOIN genres g ON g.genre_id = mg.genre_id
+                WHERE m.release_year IS NOT NULL AND m.overview IS NOT NULL AND m.overview != ''
+                GROUP BY m.movie_id
                 UNION ALL
                 SELECT 'tv' AS media_type,
                        s.show_id AS item_id,
                        s.tmdb_id,
                        s.title,
-                       COALESCE(s.overview, '') AS overview,
+                       s.overview,
                        s.poster_path,
                        s.tmdb_vote_avg AS score,
                        s.popularity,
@@ -544,14 +550,12 @@ def new_releases():
                            ELSE NULL
                        END AS release_sort,
                        s.first_air_date AS release_date,
-                       (
-                           SELECT GROUP_CONCAT(DISTINCT g.name)
-                           FROM show_genres sg
-                           JOIN genres g ON g.genre_id = sg.genre_id
-                           WHERE sg.show_id = s.show_id
-                       ) AS genres
+                       GROUP_CONCAT(DISTINCT g.name) AS genres
                 FROM shows s
-                WHERE s.first_air_date IS NOT NULL
+                INNER JOIN show_genres sg ON sg.show_id = s.show_id
+                INNER JOIN genres g ON g.genre_id = sg.genre_id
+                WHERE s.first_air_date IS NOT NULL AND s.overview IS NOT NULL AND s.overview != ''
+                GROUP BY s.show_id
             )
             ORDER BY (release_sort IS NULL), release_sort DESC, (score IS NULL), score DESC, popularity DESC, title
             LIMIT ?
@@ -596,16 +600,16 @@ def search_catalog():
                m.movie_id AS item_id,
                m.tmdb_id,
                m.title,
-               COALESCE(m.overview, '') AS overview,
+               m.overview,
                m.poster_path,
                m.tmdb_vote_avg AS vote_average,
                m.popularity,
                CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
                GROUP_CONCAT(DISTINCT g.name) AS genres
         FROM movies m
-        LEFT JOIN movie_genres mg ON mg.movie_id = m.movie_id
-        LEFT JOIN genres g ON g.genre_id = mg.genre_id
-        WHERE lower(m.title) LIKE ?
+        INNER JOIN movie_genres mg ON mg.movie_id = m.movie_id
+        INNER JOIN genres g ON g.genre_id = mg.genre_id
+        WHERE lower(m.title) LIKE ? AND m.overview IS NOT NULL AND m.overview != ''
         GROUP BY m.movie_id
         """,
         (like,),
@@ -618,16 +622,16 @@ def search_catalog():
                s.show_id AS item_id,
                s.tmdb_id,
                s.title,
-               COALESCE(s.overview, '') AS overview,
+               s.overview,
                s.poster_path,
                s.tmdb_vote_avg AS vote_average,
                s.popularity,
                s.first_air_date AS release_date,
                GROUP_CONCAT(DISTINCT g.name) AS genres
         FROM shows s
-        LEFT JOIN show_genres sg ON sg.show_id = s.show_id
-        LEFT JOIN genres g ON g.genre_id = sg.genre_id
-        WHERE lower(s.title) LIKE ?
+        INNER JOIN show_genres sg ON sg.show_id = s.show_id
+        INNER JOIN genres g ON g.genre_id = sg.genre_id
+        WHERE lower(s.title) LIKE ? AND s.overview IS NOT NULL AND s.overview != ''
         GROUP BY s.show_id
         """,
         (like,),
@@ -897,6 +901,129 @@ def remove_watchlist():
 
     deleted = execute(sql, (user_id, target_id))
     return jsonify({"ok": True, "deleted": deleted})
+
+
+@app.get("/api/movie/<int:movie_id>")
+def get_movie_detail(movie_id: int):
+    """Get detailed information for a specific movie."""
+    rows = query(
+        """
+        SELECT m.movie_id,
+               m.tmdb_id,
+               m.title,
+               m.overview,
+               m.poster_path,
+               m.backdrop_path,
+               m.release_year,
+               m.runtime_minutes,
+               m.tmdb_vote_avg,
+               m.tmdb_vote_count,
+               m.popularity,
+               m.original_language,
+               m.budget,
+               m.revenue,
+               GROUP_CONCAT(DISTINCT g.name) AS genres,
+               AVG(r.rating) AS user_avg_rating,
+               COUNT(DISTINCT r.review_id) AS review_count
+        FROM movies m
+        LEFT JOIN movie_genres mg ON mg.movie_id = m.movie_id
+        LEFT JOIN genres g ON g.genre_id = mg.genre_id
+        LEFT JOIN reviews r ON r.movie_id = m.movie_id
+        WHERE m.movie_id = ?
+        GROUP BY m.movie_id
+        """,
+        (movie_id,),
+    )
+    
+    if not rows:
+        return jsonify({"error": "Movie not found"}), 404
+    
+    row = dict(rows[0])
+    genres = [g.strip() for g in (row.get("genres") or "").split(",") if g.strip()]
+    
+    result = {
+        "movie_id": row["movie_id"],
+        "tmdb_id": row["tmdb_id"],
+        "title": row["title"],
+        "overview": row.get("overview") or "",
+        "poster_path": row.get("poster_path"),
+        "backdrop_path": row.get("backdrop_path"),
+        "release_year": row.get("release_year"),
+        "runtime_minutes": row.get("runtime_minutes"),
+        "vote_average": row.get("tmdb_vote_avg"),
+        "vote_count": row.get("tmdb_vote_count"),
+        "popularity": row.get("popularity"),
+        "original_language": row.get("original_language"),
+        "budget": row.get("budget"),
+        "revenue": row.get("revenue"),
+        "genres": genres,
+        "user_avg_rating": row.get("user_avg_rating"),
+        "review_count": row.get("review_count") or 0,
+        "media_type": "movie"
+    }
+    
+    return jsonify(result)
+
+
+@app.get("/api/show/<int:show_id>")
+def get_show_detail(show_id: int):
+    """Get detailed information for a specific TV show."""
+    rows = query(
+        """
+        SELECT s.show_id,
+               s.tmdb_id,
+               s.title,
+               s.overview,
+               s.poster_path,
+               s.backdrop_path,
+               s.first_air_date,
+               s.last_air_date,
+               s.tmdb_vote_avg,
+               s.tmdb_vote_count,
+               s.popularity,
+               s.original_language,
+               COUNT(DISTINCT se.season_id) AS season_count,
+               GROUP_CONCAT(DISTINCT g.name) AS genres,
+               AVG(r.rating) AS user_avg_rating,
+               COUNT(DISTINCT r.review_id) AS review_count
+        FROM shows s
+        LEFT JOIN seasons se ON se.show_id = s.show_id
+        LEFT JOIN show_genres sg ON sg.show_id = s.show_id
+        LEFT JOIN genres g ON g.genre_id = sg.genre_id
+        LEFT JOIN reviews r ON r.show_id = s.show_id
+        WHERE s.show_id = ?
+        GROUP BY s.show_id
+        """,
+        (show_id,),
+    )
+    
+    if not rows:
+        return jsonify({"error": "TV show not found"}), 404
+    
+    row = dict(rows[0])
+    genres = [g.strip() for g in (row.get("genres") or "").split(",") if g.strip()]
+    
+    result = {
+        "show_id": row["show_id"],
+        "tmdb_id": row["tmdb_id"],
+        "title": row["title"],
+        "overview": row.get("overview") or "",
+        "poster_path": row.get("poster_path"),
+        "backdrop_path": row.get("backdrop_path"),
+        "first_air_date": row.get("first_air_date"),
+        "last_air_date": row.get("last_air_date"),
+        "vote_average": row.get("tmdb_vote_avg"),
+        "vote_count": row.get("tmdb_vote_count"),
+        "popularity": row.get("popularity"),
+        "original_language": row.get("original_language"),
+        "season_count": row.get("season_count") or 0,
+        "genres": genres,
+        "user_avg_rating": row.get("user_avg_rating"),
+        "review_count": row.get("review_count") or 0,
+        "media_type": "tv"
+    }
+    
+    return jsonify(result)
 
 
 if __name__ == "__main__":

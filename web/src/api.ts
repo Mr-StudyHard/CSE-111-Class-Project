@@ -111,3 +111,54 @@ export async function signup(email: string, password: string, username?: string)
 		return { ok: false, error: String(msg) } as SignupResponse
 	}
 }
+
+export type MovieDetail = {
+	movie_id: number
+	tmdb_id: number
+	title: string
+	overview: string
+	poster_path?: string
+	backdrop_path?: string
+	release_year?: number
+	runtime_minutes?: number
+	vote_average?: number
+	vote_count?: number
+	popularity?: number
+	original_language?: string
+	budget?: number
+	revenue?: number
+	genres: string[]
+	user_avg_rating?: number
+	review_count: number
+	media_type: 'movie'
+}
+
+export type ShowDetail = {
+	show_id: number
+	tmdb_id: number
+	title: string
+	overview: string
+	poster_path?: string
+	backdrop_path?: string
+	first_air_date?: string
+	last_air_date?: string
+	vote_average?: number
+	vote_count?: number
+	popularity?: number
+	original_language?: string
+	season_count: number
+	genres: string[]
+	user_avg_rating?: number
+	review_count: number
+	media_type: 'tv'
+}
+
+export async function getMovieDetail(movieId: number) {
+	const { data } = await api.get(`/movie/${movieId}`)
+	return data as MovieDetail
+}
+
+export async function getShowDetail(showId: number) {
+	const { data } = await api.get(`/show/${showId}`)
+	return data as ShowDetail
+}
