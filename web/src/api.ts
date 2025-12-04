@@ -49,10 +49,30 @@ export async function getSummary() {
 	}
 }
 
-export async function getList(type: 'movie' | 'tv', sort = 'popularity', page = 1, limit = 20) {
+export async function getList(
+	type: 'movie' | 'tv', 
+	sort = 'popularity', 
+	page = 1, 
+	limit = 20, 
+	genre?: string, 
+	language?: string
+) {
 	const path = type === 'movie' ? '/movies' : '/tv'
-	const { data } = await api.get(path, { params: { sort, page, limit } })
+	const params: any = { sort, page, limit }
+	if (genre && genre !== 'all') params.genre = genre
+	if (language && language !== 'all') params.language = language
+	const { data } = await api.get(path, { params })
 	return data as { total: number; page: number; results: MediaItem[] }
+}
+
+export async function getGenres() {
+	const { data } = await api.get('/genres')
+	return data as { genres: string[] }
+}
+
+export async function getLanguages() {
+	const { data } = await api.get('/languages')
+	return data as { languages: string[] }
 }
 
 export async function refresh(pages = 1) {

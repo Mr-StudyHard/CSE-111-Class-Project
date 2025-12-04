@@ -66,7 +66,7 @@ INSERT INTO episodes (season_id, episode_number, title, air_date, runtime_min) V
 INSERT INTO movie_genres (movie_id, genre_id)
 SELECT m.movie_id, g.genre_id FROM movies m
 JOIN genres g ON g.name IN ('Action','Thriller')
-WHERE m.title='John Wick: Recharged';
+WHERE m.title='John Wick: Chapter 4';
 
 INSERT INTO movie_genres (movie_id, genre_id)
 SELECT m.movie_id, g.genre_id FROM movies m
@@ -174,7 +174,7 @@ WHERE u.email='chris@example.com' AND s.title='Stranger Things';
 INSERT INTO reviews (user_id, movie_id, rating, content)
 SELECT u.user_id, m.movie_id, 7.8, 'Stylish action sequences.'
 FROM users u, movies m
-WHERE u.email='dana@example.com' AND m.title='John Wick: Recharged';
+WHERE u.email='dana@example.com' AND m.title='John Wick: Chapter 4';
 
 -- Discussions
 INSERT INTO discussions (user_id, movie_id, title)
@@ -217,7 +217,7 @@ WHERE u.email='bob@example.com' AND s.title='Stranger Things';
 INSERT INTO watchlists (user_id, movie_id, show_id)
 SELECT u.user_id, m.movie_id, NULL
 FROM users u, movies m
-WHERE u.email='chris@example.com' AND m.title='John Wick: Recharged';
+WHERE u.email='chris@example.com' AND m.title='John Wick: Chapter 4';
 
 COMMIT;
 

@@ -1,0 +1,37 @@
+2025-12-03 21:04:12,582 - ETLScheduler - INFO - ETL Scheduler initialized
+2025-12-03 21:04:12,582 - ETLScheduler - INFO - ================================================================================
+2025-12-03 21:04:12,583 - ETLScheduler - INFO - Starting ETL job: RUN-1-20251203-210412
+2025-12-03 21:04:12,583 - ETLScheduler - INFO - ================================================================================
+2025-12-03 21:07:59,369 - ETLScheduler - INFO - ETL job RUN-1-20251203-210412 completed successfully
+2025-12-03 21:07:59,369 - ETLScheduler - INFO - Execution time: 226.79 seconds
+2025-12-03 21:07:59,370 - ETLScheduler - INFO - Statistics: {'movies_processed': 100, 'movies_inserted': 31, 'movies_updated': 59, 'movies_skipped': 10, 'shows_processed': 50, 'shows_inserted': 1, 'shows_updated': 47, 'shows_skipped': 2, 'genres_synced': 27, 'people_synced': 2923, 'api_calls': 612, 'errors': 0, 'execution_time': '226.77s'}
+2025-12-03 21:07:59,379 - ETLScheduler - INFO - ================================================================================
+2025-12-03 21:07:59,379 - ETLScheduler - INFO - ETL job RUN-1-20251203-210412 finished
+2025-12-03 21:07:59,379 - ETLScheduler - INFO - ================================================================================
+
+2025-12-03 21:07:59,828 - ETLScheduler - INFO - ETL Scheduler initialized
+2025-12-03 21:07:59,829 - ETLScheduler - INFO - ================================================================================
+2025-12-03 21:07:59,829 - ETLScheduler - INFO - Starting ETL job: RUN-1-20251203-210759
+2025-12-03 21:07:59,829 - ETLScheduler - INFO - ================================================================================
+2025-12-03 21:10:59,942 - ETLScheduler - INFO - ETL job RUN-1-20251203-210759 completed successfully
+2025-12-03 21:10:59,943 - ETLScheduler - INFO - Execution time: 180.11 seconds
+2025-12-03 21:10:59,947 - ETLScheduler - INFO - Statistics: {'movies_processed': 100, 'movies_inserted': 0, 'movies_updated': 90, 'movies_skipped': 10, 'shows_processed': 50, 'shows_inserted': 0, 'shows_updated': 48, 'shows_skipped': 2, 'genres_synced': 27, 'people_synced': 2923, 'api_calls': 612, 'errors': 0, 'execution_time': '180.10s'}
+2025-12-03 21:10:59,976 - ETLScheduler - INFO - ================================================================================
+2025-12-03 21:10:59,977 - ETLScheduler - INFO - ETL job RUN-1-20251203-210759 finished
+2025-12-03 21:10:59,981 - ETLScheduler - INFO - ================================================================================
+
+2025-12-03 21:11:55,462 - ETLScheduler - INFO - ETL Scheduler initialized
+2025-12-03 21:11:55,464 - ETLScheduler - INFO - Scheduled ETL to run every 24 hours
+2025-12-03 21:11:55,472 - ETLScheduler - INFO - ETL Scheduler started successfully
+2025-12-03 21:11:55,472 - ETLScheduler - INFO - Running initial ETL on startup...
+2025-12-03 21:11:55,473 - ETLScheduler - INFO - ================================================================================
+2025-12-03 21:11:55,473 - ETLScheduler - INFO - Starting ETL job: RUN-1-20251203-211155
+2025-12-03 21:11:55,474 - ETLScheduler - INFO - ================================================================================
+2025-12-03 21:14:51,329 - ETLScheduler - INFO - ETL job RUN-1-20251203-211155 completed successfully
+2025-12-03 21:14:51,330 - ETLScheduler - INFO - Execution time: 175.86 seconds
+2025-12-03 21:14:51,331 - ETLScheduler - INFO - Statistics: {'movies_processed': 100, 'movies_inserted': 0, 'movies_updated': 90, 'movies_skipped': 10, 'shows_processed': 50, 'shows_inserted': 0, 'shows_updated': 48, 'shows_skipped': 2, 'genres_synced': 27, 'people_synced': 2923, 'api_calls': 612, 'errors': 0, 'execution_time': '175.83s'}
+2025-12-03 21:14:51,349 - ETLScheduler - INFO - ================================================================================
+2025-12-03 21:14:51,351 - ETLScheduler - INFO - ETL job RUN-1-20251203-211155 finished
+2025-12-03 21:14:51,351 - ETLScheduler - INFO - ================================================================================
+
+2025-12-03 21:17:17,560 - ETLScheduler - INFO - ETL Scheduler initialized

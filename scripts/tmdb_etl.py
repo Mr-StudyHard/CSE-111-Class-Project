@@ -33,7 +33,25 @@ def connect_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    ensure_extended_columns(conn)
     return conn
+
+
+def ensure_extended_columns(conn: sqlite3.Connection) -> None:
+    """Add newer optional columns if they are missing."""
+    def has_column(table: str, column: str) -> bool:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(row["name"] == column for row in rows)
+
+    with conn:
+        if not has_column("movies", "backdrop_path"):
+            conn.execute("ALTER TABLE movies ADD COLUMN backdrop_path TEXT")
+        if not has_column("movies", "original_language"):
+            conn.execute("ALTER TABLE movies ADD COLUMN original_language TEXT")
+        if not has_column("shows", "backdrop_path"):
+            conn.execute("ALTER TABLE shows ADD COLUMN backdrop_path TEXT")
+        if not has_column("shows", "original_language"):
+            conn.execute("ALTER TABLE shows ADD COLUMN original_language TEXT")
 
 
 class TMDbClient:
@@ -77,20 +95,25 @@ def upsert_movie(conn: sqlite3.Connection, data: dict):
         data.get("runtime"),
         data.get("overview"),
         data.get("poster_path"),
+        data.get("backdrop_path"),
+        data.get("original_language"),
         data.get("vote_average"),
         data.get("popularity"),
     )
     conn.execute(
         """
         INSERT INTO movies (
-            tmdb_id, title, release_year, runtime_min, overview, poster_path, tmdb_vote_avg, popularity
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            tmdb_id, title, release_year, runtime_min, overview, poster_path,
+            backdrop_path, original_language, tmdb_vote_avg, popularity
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tmdb_id) DO UPDATE SET
             title = excluded.title,
             release_year = excluded.release_year,
             runtime_min = excluded.runtime_min,
             overview = excluded.overview,
             poster_path = excluded.poster_path,
+            backdrop_path = excluded.backdrop_path,
+            original_language = excluded.original_language,
             tmdb_vote_avg = excluded.tmdb_vote_avg,
             popularity = excluded.popularity
         """,
@@ -106,20 +129,25 @@ def upsert_show(conn: sqlite3.Connection, data: dict):
         data.get("last_air_date"),
         data.get("overview"),
         data.get("poster_path"),
+        data.get("backdrop_path"),
+        data.get("original_language"),
         data.get("vote_average"),
         data.get("popularity"),
     )
     conn.execute(
         """
         INSERT INTO shows (
-            tmdb_id, title, first_air_date, last_air_date, overview, poster_path, tmdb_vote_avg, popularity
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            tmdb_id, title, first_air_date, last_air_date, overview, poster_path,
+            backdrop_path, original_language, tmdb_vote_avg, popularity
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tmdb_id) DO UPDATE SET
             title = excluded.title,
             first_air_date = excluded.first_air_date,
             last_air_date = excluded.last_air_date,
             overview = excluded.overview,
             poster_path = excluded.poster_path,
+            backdrop_path = excluded.backdrop_path,
+            original_language = excluded.original_language,
             tmdb_vote_avg = excluded.tmdb_vote_avg,
             popularity = excluded.popularity
         """,

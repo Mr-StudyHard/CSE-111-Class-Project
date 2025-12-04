@@ -118,13 +118,32 @@ def _summary_payload() -> dict[str, Any]:
         """
     )
     top_genres = [{"genre": row["genre"], "count": row["cnt"]} for row in top_genres_rows]
+    language_rows = query(
+        """
+        SELECT language, COUNT(*) AS cnt
+        FROM (
+            SELECT lower(trim(original_language)) AS language
+            FROM movies
+            WHERE original_language IS NOT NULL AND trim(original_language) != ''
+            UNION ALL
+            SELECT lower(trim(original_language)) AS language
+            FROM shows
+            WHERE original_language IS NOT NULL AND trim(original_language) != ''
+        )
+        WHERE language IS NOT NULL AND language != ''
+        GROUP BY language
+        ORDER BY cnt DESC, language
+        LIMIT 20
+        """
+    )
+    languages = [{"language": row["language"], "count": row["cnt"]} for row in language_rows]
     return {
         "total_items": total_items,
         "movies": movies_count,
         "tv": shows_count,
         "avg_rating": avg_rating,
         "top_genres": top_genres,
-        "languages": [],
+        "languages": languages,
     }
 
 
@@ -327,22 +346,51 @@ def login_route():
     return jsonify({"ok": True, "user": display_name, "email": record["email"]})
 
 
-def _list_media(media_type: str, sort: str, page: int, limit: int) -> dict[str, Any]:
+def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | None = None, language: str | None = None) -> dict[str, Any]:
     table = "movies" if media_type == "movie" else "shows"
     id_col = "movie_id" if media_type == "movie" else "show_id"
     release_col = "release_year" if media_type == "movie" else "first_air_date"
-    order_col = "tmdb_vote_avg"
     offset = (page - 1) * limit
     genre_table = "movie_genres" if media_type == "movie" else "show_genres"
+    
+    # Build WHERE clause
+    where_conditions = ["t.overview IS NOT NULL", "t.overview != ''"]
+    params_count = []
+    params_rows = []
+    
+    # Add genre filter
+    if genre and genre.lower() != "all":
+        where_conditions.append("g.name = ?")
+        params_count.append(genre)
+        params_rows.append(genre)
+    
+    # Add language filter
+    if language and language.lower() != "all":
+        where_conditions.append("t.original_language = ?")
+        params_count.append(language)
+        params_rows.append(language)
+    
+    where_clause = " AND ".join(where_conditions)
+    
+    # Determine order clause
+    if sort == "rating":
+        order_clause = f"(t.tmdb_vote_avg IS NULL), t.tmdb_vote_avg DESC, t.title"
+    elif sort == "title":
+        order_clause = "t.title ASC"
+    elif sort == "release_date":
+        order_clause = f"(t.{release_col} IS NULL), t.{release_col} DESC, t.title"
+    else:  # popularity (default)
+        order_clause = f"(t.popularity IS NULL), t.popularity DESC, t.title"
 
     # Count only items with overview AND at least one genre
     total_sql = f"""
         SELECT COUNT(DISTINCT t.{id_col}) AS cnt 
         FROM {table} t
         INNER JOIN {genre_table} gt ON t.{id_col} = gt.{id_col}
-        WHERE t.overview IS NOT NULL AND t.overview != ''
+        INNER JOIN genres g ON g.genre_id = gt.genre_id
+        WHERE {where_clause}
     """
-    total = query(total_sql)[0]["cnt"]
+    total = query(total_sql, tuple(params_count))[0]["cnt"]
 
     rows = query(
         f"""
@@ -352,14 +400,17 @@ def _list_media(media_type: str, sort: str, page: int, limit: int) -> dict[str, 
                t.overview,
                t.poster_path,
                t.tmdb_vote_avg,
-               t.{release_col} AS release_value
+               t.popularity,
+               t.{release_col} AS release_value,
+               t.original_language
         FROM {table} t
         INNER JOIN {genre_table} gt ON t.{id_col} = gt.{id_col}
-        WHERE t.overview IS NOT NULL AND t.overview != ''
-        ORDER BY (t.{order_col} IS NULL), t.{order_col} DESC, t.title
+        INNER JOIN genres g ON g.genre_id = gt.genre_id
+        WHERE {where_clause}
+        ORDER BY {order_clause}
         LIMIT ? OFFSET ?
         """,
-        (limit, offset),
+        tuple(params_rows) + (limit, offset),
     )
 
     results = []
@@ -377,7 +428,9 @@ def _list_media(media_type: str, sort: str, page: int, limit: int) -> dict[str, 
             "poster_path": data.get("poster_path"),
             "backdrop_path": None,
             "vote_average": data.get("tmdb_vote_avg"),
+            "popularity": data.get("popularity"),
             "release_date": release_value,
+            "original_language": data.get("original_language"),
             "genres": [],
         }
         results.append(result)
@@ -390,12 +443,38 @@ def summary():
     return jsonify(_summary_payload())
 
 
+@app.get("/api/genres")
+def get_genres():
+    """Get all available genres"""
+    rows = query("SELECT name FROM genres ORDER BY name")
+    genres = [row["name"] for row in rows]
+    return jsonify({"genres": genres})
+
+
+@app.get("/api/languages")
+def get_languages():
+    """Get all available languages from movies and shows"""
+    movie_langs = query("SELECT DISTINCT original_language FROM movies WHERE original_language IS NOT NULL ORDER BY original_language")
+    show_langs = query("SELECT DISTINCT original_language FROM shows WHERE original_language IS NOT NULL ORDER BY original_language")
+    all_langs = set()
+    for row in movie_langs:
+        if row["original_language"]:
+            all_langs.add(row["original_language"])
+    for row in show_langs:
+        if row["original_language"]:
+            all_langs.add(row["original_language"])
+    languages = sorted(list(all_langs))
+    return jsonify({"languages": languages})
+
+
 @app.get("/api/movies")
 def movies_list():
     limit = _get_int(request.args.get("limit"), DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE)
     page = _get_int(request.args.get("page"), 1)
     sort = request.args.get("sort", "popularity")
-    payload = _list_media("movie", sort, page, limit)
+    genre = request.args.get("genre")
+    language = request.args.get("language")
+    payload = _list_media("movie", sort, page, limit, genre, language)
     return jsonify(payload)
 
 
@@ -404,7 +483,9 @@ def shows_list():
     limit = _get_int(request.args.get("limit"), DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE)
     page = _get_int(request.args.get("page"), 1)
     sort = request.args.get("sort", "popularity")
-    payload = _list_media("show", sort, page, limit)
+    genre = request.args.get("genre")
+    language = request.args.get("language")
+    payload = _list_media("show", sort, page, limit, genre, language)
     return jsonify(payload)
 
 
@@ -689,6 +770,10 @@ def movie_detail(movie_id: int):
         return jsonify({"error": "movie not found"}), 404
 
     movie = dict(row[0])
+    movie["vote_average"] = movie.get("tmdb_vote_avg")
+    movie["runtime_minutes"] = movie.get("runtime_min")
+    if movie.get("user_vote_avg") is not None:
+        movie["user_avg_rating"] = float(movie["user_vote_avg"])
     genres = query(
         """
         SELECT g.name
@@ -738,6 +823,9 @@ def show_detail(show_id: int):
         return jsonify({"error": "show not found"}), 404
 
     show = dict(row[0])
+    show["vote_average"] = show.get("tmdb_vote_avg")
+    if show.get("user_vote_avg") is not None:
+        show["user_avg_rating"] = float(show["user_vote_avg"])
     genres = query(
         """
         SELECT g.name

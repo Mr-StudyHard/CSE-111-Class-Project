@@ -1,18 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages } from './api'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
 type ReleaseFilter = 'all' | 'movie' | 'tv'
-
-const ADULT_KEYWORDS = /(erotic|erotica|adult|porn|pornographic|xxx|nsfw|hentai|ecchi|seinen|mature|r-rated|18\+|guilty pleasure)/i
-const isAdultContent = (item: { media_type?: string; genres?: string[]; title?: string }) => {
-  // Check genres for adult keywords
-  if(item.genres?.some(g => ADULT_KEYWORDS.test(g))) return true
-  // Check title for adult keywords
-  if(item.title && ADULT_KEYWORDS.test(item.title)) return true
-  return false
-}
 
 const NEW_RELEASE_FETCH_LIMIT = 24
 const NEW_RELEASE_PAGE_SIZE = 6
@@ -36,14 +27,16 @@ const formatLanguageLabel = (code?: string | null) => {
   return normalized.toUpperCase()
 }
 
-function Card({item, onClick}:{item:MediaItem; onClick?: () => void}){
+function Card({item, onClick, style}:{item:MediaItem; onClick?: () => void; style?: CSSProperties}){
   const img = item.poster_path ? `https://image.tmdb.org/t/p/w300${item.poster_path}` : undefined
-  const adult = isAdultContent(item)
   return (
-    <div className={`card${adult ? ' card-adult' : ''}${onClick ? ' card-clickable' : ''}`} onClick={onClick}>
+    <div
+      className={`card${onClick ? ' card-clickable' : ''}`}
+      onClick={onClick}
+      style={style}
+    >
       <div className="card-media">
-      {img ? <img src={img} alt={item.title} loading="lazy"/> : <div className="noimg">No image</div>}
-        {adult && <div className="card-adult-overlay"><span className="card-adult-badge">18+</span><span>Adult content hidden</span></div>}
+        {img ? <img src={img} alt={item.title} loading="lazy"/> : <div className="noimg">No image</div>}
       </div>
       <div className="card-body">
         <div className="chip">{item.media_type?.toUpperCase()}</div>
@@ -58,11 +51,12 @@ function Card({item, onClick}:{item:MediaItem; onClick?: () => void}){
   )
 }
 
-function Stat({label, value}:{label:string;value:React.ReactNode}){
+function Stat({label, value, hint}:{label:string;value:React.ReactNode;hint?:React.ReactNode}){
   return (
     <div className="stat">
       <div className="stat-value">{value}</div>
       <div className="stat-label">{label}</div>
+      {hint ? <div className="stat-hint">{hint}</div> : null}
     </div>
   )
 }
@@ -98,12 +92,37 @@ export default function App() {
   const [moviesPage, setMoviesPage] = useState(1)
   const [moviesTotal, setMoviesTotal] = useState(0)
   const [moviesLoading, setMoviesLoading] = useState(false)
+  const [moviesSlideDirection, setMoviesSlideDirection] = useState<'left' | 'right' | 'none'>('none')
+  const [moviesTransitionType, setMoviesTransitionType] = useState<'slide' | 'none'>('none')
+  const [moviesViewTransition, setMoviesViewTransition] = useState<'idle' | 'entering'>('idle')
+  const [moviesGenre, setMoviesGenre] = useState<string>('all')
+  const [moviesLanguage, setMoviesLanguage] = useState<string>('all')
+  const [moviesSort, setMoviesSort] = useState<string>('popularity')
+  const [moviesPendingGenre, setMoviesPendingGenre] = useState<string>('all')
+  const [moviesPendingLanguage, setMoviesPendingLanguage] = useState<string>('all')
+  const [moviesPendingSort, setMoviesPendingSort] = useState<string>('popularity')
   const [tv, setTv] = useState<MediaItem[]>([])
   const [tvPage, setTvPage] = useState(1)
   const [tvTotal, setTvTotal] = useState(0)
   const [tvLoading, setTvLoading] = useState(false)
+  const [tvSlideDirection, setTvSlideDirection] = useState<'left' | 'right' | 'none'>('none')
+  const [tvTransitionType, setTvTransitionType] = useState<'slide' | 'none'>('none')
+  const [tvViewTransition, setTvViewTransition] = useState<'idle' | 'entering'>('idle')
+  const [tvGenre, setTvGenre] = useState<string>('all')
+  const [tvLanguage, setTvLanguage] = useState<string>('all')
+  const [tvSort, setTvSort] = useState<string>('popularity')
+  const [tvPendingGenre, setTvPendingGenre] = useState<string>('all')
+  const [tvPendingLanguage, setTvPendingLanguage] = useState<string>('all')
+  const [tvPendingSort, setTvPendingSort] = useState<string>('popularity')
+  const [availableGenres, setAvailableGenres] = useState<string[]>([])
+  const [availableLanguages, setAvailableLanguages] = useState<string[]>([])
   const [q, setQ] = useState('')
   const [results, setResults] = useState<MediaItem[]>([])
+  const [searchHints, setSearchHints] = useState<MediaItem[]>([])
+  const [searchHintsLoading, setSearchHintsLoading] = useState(false)
+  const searchHintRequestId = useRef(0)
+  const [showSearchHints, setShowSearchHints] = useState(false)
+  const searchBlurTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -114,6 +133,8 @@ export default function App() {
   const [trending, setTrending] = useState<TrendingItem[]>([])
   const [trendingLoading, setTrendingLoading] = useState(false)
   const [trendingError, setTrendingError] = useState<string | null>(null)
+  const [trendingFadeState, setTrendingFadeState] = useState<'visible' | 'fading-out' | 'fading-in'>('visible')
+  const trendingRequestId = useRef(0)
   const [carouselIndex, setCarouselIndex] = useState(0)
   // Carousel is always locked to weekly trending
   const [carouselSlides, setCarouselSlides] = useState<TrendingItem[]>([])
@@ -123,6 +144,10 @@ export default function App() {
   const [newReleasesError, setNewReleasesError] = useState<string | null>(null)
   const [newReleaseFilter, setNewReleaseFilter] = useState<ReleaseFilter>('all')
   const [newReleasePage, setNewReleasePage] = useState(0)
+  const [newReleasesFadeState, setNewReleasesFadeState] = useState<'visible' | 'fading-out' | 'fading-in'>('visible')
+  const [newReleaseSlideDirection, setNewReleaseSlideDirection] = useState<'left' | 'right' | 'none'>('none')
+  const [newReleaseTransitionType, setNewReleaseTransitionType] = useState<'fade' | 'slide' | 'none'>('none')
+  const newReleasesRequestId = useRef(0)
   // Remember-me support: if a profile was stored and flag set, restore it.
   const [currentUser, setCurrentUser] = useState<{user:string;email:string}|null>(() => {
     try {
@@ -144,14 +169,24 @@ export default function App() {
   const [signupError, setSignupError] = useState<string | null>(null)
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const accountMenuRef = useRef<HTMLDivElement | null>(null)
+  const detailRequestId = useRef(0)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [detailData, setDetailData] = useState<MovieDetail | ShowDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [moviesAnimationKey, setMoviesAnimationKey] = useState(0)
+  const [tvAnimationKey, setTvAnimationKey] = useState(0)
+  const moviesRequestId = useRef(0)
+  const tvRequestId = useRef(0)
+  const [moviesReady, setMoviesReady] = useState(false)
+  const [tvReady, setTvReady] = useState(false)
   const primaryNav = [
     { id: 'analytics', label: 'Analytics' },
     { id: 'movies', label: 'Movies' },
     { id: 'tv', label: 'TV' },
   ]
+  const canSubmitSearch = q.trim().length > 0
 
   // Sync URL to state on mount and location change
   useEffect(() => {
@@ -183,8 +218,47 @@ export default function App() {
   }, [location.pathname])
 
   // Helper to navigate with state sync
+  const resetMoviesState = () => {
+    moviesRequestId.current++
+    setMoviesGenre('all')
+    setMoviesLanguage('all')
+    setMoviesSort('popularity')
+    setMoviesPendingGenre('all')
+    setMoviesPendingLanguage('all')
+    setMoviesPendingSort('popularity')
+    setMovies([])
+    setMoviesTotal(0)
+    setMoviesPage(1)
+    setMoviesAnimationKey(prev => prev + 1)
+    setMoviesReady(false)
+  }
+
+  const resetTvState = () => {
+    tvRequestId.current++
+    setTvGenre('all')
+    setTvLanguage('all')
+    setTvSort('popularity')
+    setTvPendingGenre('all')
+    setTvPendingLanguage('all')
+    setTvPendingSort('popularity')
+    setTv([])
+    setTvTotal(0)
+    setTvPage(1)
+    setTvAnimationKey(prev => prev + 1)
+    setTvReady(false)
+  }
+
   const navigateToTab = (newTab: string) => {
     const targetPath = `/${newTab === 'home' ? '' : newTab}`
+    if(newTab !== tab){
+      if(newTab === 'movies'){
+        resetMoviesState()
+        loadMovies(1)
+      } else if(newTab === 'tv'){
+        resetTvState()
+        loadTv(1)
+      }
+    }
     setTab(newTab)
     setView('app')
     navigate(targetPath)
@@ -197,6 +271,110 @@ export default function App() {
     } else {
       navigate(`/${newView}`)
     }
+  }
+
+  const handleLogout = () => {
+    setAccountMenuOpen(false)
+    setCurrentUser(null)
+    try {
+      sessionStorage.removeItem('currentUser')
+      localStorage.removeItem('currentUser')
+      localStorage.removeItem('rememberUser')
+    } catch {}
+  }
+
+  const avatarInitials = useMemo(() => {
+    const name = currentUser?.user ?? ''
+    if(!name.trim()) return ''
+    const parts = name.trim().split(/\s+/).slice(0, 2)
+    const letters = parts.map(part => part.charAt(0)?.toUpperCase() ?? '').join('')
+    return letters || ''
+  }, [currentUser?.user])
+
+  const renderAccountControls = () => {
+    if(!currentUser){
+      return (
+        <button
+          type="button"
+          className="btn-outline header-auth"
+          onClick={()=>navigateToView('login')}
+        >
+          Log In
+        </button>
+      )
+    }
+    const displayName = currentUser.user?.trim() || 'Signed in'
+    const displayEmail = currentUser.email || ''
+    return (
+      <div className={`header-account${accountMenuOpen ? ' open' : ''}`} ref={accountMenuRef}>
+        <button
+          type="button"
+          className="avatar-button"
+          aria-haspopup="menu"
+          aria-expanded={accountMenuOpen}
+          onClick={()=>setAccountMenuOpen(prev => !prev)}
+        >
+          <span className="visually-hidden">Open account options</span>
+          <span className="avatar-circle" aria-hidden="true">
+            {avatarInitials ? (
+              <span className="avatar-initials">{avatarInitials}</span>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" role="presentation">
+                <path
+                  d="M12 12.75a4.25 4.25 0 1 0 0-8.5 4.25 4.25 0 0 0 0 8.5Z"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M18.5 19.5c0-3.59-2.91-6.5-6.5-6.5s-6.5 2.91-6.5 6.5"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
+          </span>
+        </button>
+        {accountMenuOpen && (
+          <div className="account-menu" role="menu">
+            <div className="account-menu-header">
+              <span className="account-menu-name">{displayName}</span>
+              <span className="account-menu-email">{displayEmail}</span>
+            </div>
+            <button type="button" className="account-menu-item" role="menuitem" disabled>
+              <span className="menu-icon" aria-hidden="true">👤</span>
+              <span className="menu-content">
+                <span className="menu-title">Profile</span>
+                <span className="menu-subtitle">Coming soon</span>
+              </span>
+            </button>
+            <button type="button" className="account-menu-item" role="menuitem" disabled>
+              <span className="menu-icon" aria-hidden="true">⚙️</span>
+              <span className="menu-content">
+                <span className="menu-title">User Settings</span>
+                <span className="menu-subtitle">Coming soon</span>
+              </span>
+            </button>
+            <div className="account-menu-separator" role="none" />
+            <button
+              type="button"
+              className="account-menu-item danger"
+              role="menuitem"
+              onClick={handleLogout}
+            >
+              <span className="menu-icon" aria-hidden="true">🚪</span>
+              <span className="menu-content">
+                <span className="menu-title">Log Out</span>
+                <span className="menu-subtitle">Sign out of this session</span>
+              </span>
+            </button>
+          </div>
+        )}
+      </div>
+    )
   }
 
   // Always prefill Admin creds when opening the login view
@@ -218,6 +396,42 @@ export default function App() {
     if(!mobileSearchOpen) return
     searchInputRef.current?.focus()
   }, [mobileSearchOpen])
+
+  useEffect(() => {
+    const term = q.trim()
+    if(term.length < 2){
+      setSearchHints([])
+      setSearchHintsLoading(false)
+      return
+    }
+    const requestId = ++searchHintRequestId.current
+    setSearchHintsLoading(true)
+    ;(async () => {
+      try{
+        const data = await search(term, 1)
+        if(requestId === searchHintRequestId.current){
+          setSearchHints((data?.results ?? []).slice(0, 6))
+        }
+      } catch (err){
+        if(requestId === searchHintRequestId.current){
+          setSearchHints([])
+        }
+        console.error('Search preview failed', err)
+      } finally {
+        if(requestId === searchHintRequestId.current){
+          setSearchHintsLoading(false)
+        }
+      }
+    })()
+  }, [q])
+
+  useEffect(() => {
+    return () => {
+      if(searchBlurTimeout.current){
+        clearTimeout(searchBlurTimeout.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if(typeof window === 'undefined') return
@@ -245,8 +459,81 @@ export default function App() {
   }, [view])
 
   useEffect(() => {
+    if(!currentUser){
+      setAccountMenuOpen(false)
+    }
+  }, [currentUser])
+
+  useEffect(() => {
+    if(!accountMenuOpen) return
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null
+      if(!target) return
+      if(accountMenuRef.current && accountMenuRef.current.contains(target)) return
+      setAccountMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('touchstart', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('touchstart', handlePointerDown)
+    }
+  }, [accountMenuOpen])
+
+  useEffect(() => {
+    if(!accountMenuOpen) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if(event.key === 'Escape'){
+        setAccountMenuOpen(false)
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [accountMenuOpen])
+
+  useEffect(() => {
+    setAccountMenuOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    if(tab === 'movies'){
+      setMoviesAnimationKey(prev => prev + 1)
+    } else if(tab === 'tv'){
+      setTvAnimationKey(prev => prev + 1)
+    }
+  }, [tab])
+
+  useEffect(() => {
     load()
+    // Load genres and languages
+    ;(async () => {
+      try {
+        const [genresData, languagesData] = await Promise.all([getGenres(), getLanguages()])
+        setAvailableGenres(genresData.genres || [])
+        setAvailableLanguages(languagesData.languages || [])
+      } catch (err) {
+        console.error('Failed to load genres/languages', err)
+      }
+    })()
   }, [])
+
+  // Reload movies when filters change
+  useEffect(() => {
+    if (tab === 'movies') {
+      loadMovies(1)
+      setMoviesPage(1)
+    }
+  }, [moviesGenre, moviesLanguage, moviesSort])
+
+  // Reload TV when filters change
+  useEffect(() => {
+    if (tab === 'tv') {
+      loadTv(1)
+      setTvPage(1)
+    }
+  }, [tvGenre, tvLanguage, tvSort])
 
   useEffect(() => {
     loadNewReleases()
@@ -280,29 +567,59 @@ export default function App() {
 
   // Load right-rail trending based on selected period
   useEffect(() => {
-    let cancelled = false
+    const requestId = ++trendingRequestId.current
+    const hasExistingContent = trending.length > 0
+    
     setTrendingLoading(true)
     setTrendingError(null)
+    
+    // If we have existing content, fade it out first
+    if (hasExistingContent) {
+      setTrendingFadeState('fading-out')
+    }
+    
     ;(async () => {
       try {
         const results = await getTrending(trendingPeriod, 10)
-        if (!cancelled) {
-          setTrending(results)
+        // Only update if this is still the latest request
+        if (requestId === trendingRequestId.current) {
+          // Wait for fade-out to complete before updating content
+          const fadeDelay = hasExistingContent ? 200 : 0
+          setTimeout(() => {
+            if (requestId === trendingRequestId.current) {
+              setTrending(results)
+              setTrendingLoading(false)
+              setTrendingFadeState('fading-in')
+              // After fade-in completes, set to visible
+              setTimeout(() => {
+                if (requestId === trendingRequestId.current) {
+                  setTrendingFadeState('visible')
+                }
+              }, 300)
+            }
+          }, fadeDelay)
         }
       } catch (err) {
-        if (!cancelled) {
-          setTrending([])
-          setTrendingError('Trending data unavailable. Try running the TMDb ETL loader.')
-        }
-      } finally {
-        if (!cancelled) {
-          setTrendingLoading(false)
+        // Only update if this is still the latest request
+        if (requestId === trendingRequestId.current) {
+          const fadeDelay = hasExistingContent ? 200 : 0
+          setTimeout(() => {
+            if (requestId === trendingRequestId.current) {
+              setTrending([])
+              setTrendingError('Trending data unavailable. Try running the TMDb ETL loader.')
+              setTrendingLoading(false)
+              setTrendingFadeState('fading-in')
+              setTimeout(() => {
+                if (requestId === trendingRequestId.current) {
+                  setTrendingFadeState('visible')
+                }
+              }, 300)
+            }
+          }, fadeDelay)
         }
       }
     })()
-    return () => {
-      cancelled = true
-    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trendingPeriod])
 
   const heroSlides = useMemo(
@@ -335,6 +652,63 @@ export default function App() {
     }
   }, [newReleases.length, newReleasePage, newReleaseTotalPages])
 
+  // Reset slide direction and transition type after animation completes
+  useEffect(() => {
+    if (newReleaseSlideDirection !== 'none') {
+      const timer = setTimeout(() => {
+        setNewReleaseSlideDirection('none')
+        setNewReleaseTransitionType('none')
+      }, 400) // Match animation duration
+      return () => clearTimeout(timer)
+    }
+  }, [newReleaseSlideDirection])
+
+  useEffect(() => {
+    if (moviesSlideDirection !== 'none') {
+      const timer = setTimeout(() => {
+        setMoviesSlideDirection('none')
+        setMoviesTransitionType('none')
+      }, 400)
+      return () => clearTimeout(timer)
+    }
+  }, [moviesSlideDirection])
+
+  useEffect(() => {
+    if (tvSlideDirection !== 'none') {
+      const timer = setTimeout(() => {
+        setTvSlideDirection('none')
+        setTvTransitionType('none')
+      }, 400)
+      return () => clearTimeout(timer)
+    }
+  }, [tvSlideDirection])
+
+  // Reset fade state and transition type after fade completes
+  useEffect(() => {
+    if (newReleasesFadeState === 'visible' && newReleaseTransitionType === 'fade') {
+      const timer = setTimeout(() => {
+        setNewReleaseTransitionType('none')
+      }, 50) // Small delay to ensure animation completes
+      return () => clearTimeout(timer)
+    }
+  }, [newReleasesFadeState, newReleaseTransitionType])
+
+  useEffect(() => {
+    if (tab === 'movies' && movies.length > 0) {
+      setMoviesViewTransition('entering')
+      const timer = window.setTimeout(() => setMoviesViewTransition('idle'), 320)
+      return () => window.clearTimeout(timer)
+    }
+  }, [tab, movies.length])
+
+  useEffect(() => {
+    if (tab === 'tv' && tv.length > 0) {
+      setTvViewTransition('entering')
+      const timer = window.setTimeout(() => setTvViewTransition('idle'), 320)
+      return () => window.clearTimeout(timer)
+    }
+  }, [tab, tv.length])
+
   const activeHeroIndex = heroSlides.length > 0 ? Math.min(carouselIndex, heroSlides.length - 1) : 0
 
   useEffect(() => {
@@ -354,46 +728,165 @@ export default function App() {
     return () => window.clearInterval(handle)
   }, [view, tab, heroSlides.length])
 
-  async function loadMovies(page = 1){
+  async function loadMovies(page = 1, overrides?: { genre?: string; language?: string; sort?: string }){
     const targetPage = Math.max(1, page)
+    const nextGenre = overrides?.genre ?? moviesGenre
+    const nextLanguage = overrides?.language ?? moviesLanguage
+    const nextSort = overrides?.sort ?? moviesSort
+    const requestId = ++moviesRequestId.current
+    setMoviesReady(false)
     setMoviesLoading(true)
     try{
-      const data = await getList('movie', 'popularity', targetPage, LIST_PAGE_SIZE)
+      const data = await getList('movie', nextSort, targetPage, LIST_PAGE_SIZE, nextGenre, nextLanguage)
+      if(requestId !== moviesRequestId.current) return
+      setMoviesGenre(nextGenre)
+      setMoviesLanguage(nextLanguage)
+      setMoviesSort(nextSort)
       const results = data?.results ?? []
       const total = typeof data?.total === 'number' ? data.total : results.length
       const resolvedPage = typeof data?.page === 'number' ? data.page : targetPage
       setMovies(results)
       setMoviesTotal(total)
       setMoviesPage(Math.max(1, resolvedPage))
+      setMoviesReady(true)
     } catch (err) {
       console.error('Failed to load movies', err)
+      if(requestId !== moviesRequestId.current) return
       setMovies([])
       setMoviesTotal(0)
       setMoviesPage(Math.max(1, targetPage))
+      setMoviesReady(true)
     } finally {
-      setMoviesLoading(false)
+      if(requestId === moviesRequestId.current){
+        setMoviesLoading(false)
+      }
     }
   }
 
-  async function loadTv(page = 1){
+  async function loadTv(page = 1, overrides?: { genre?: string; language?: string; sort?: string }){
     const targetPage = Math.max(1, page)
+    const nextGenre = overrides?.genre ?? tvGenre
+    const nextLanguage = overrides?.language ?? tvLanguage
+    const nextSort = overrides?.sort ?? tvSort
+    const requestId = ++tvRequestId.current
+    setTvReady(false)
     setTvLoading(true)
     try{
-      const data = await getList('tv', 'popularity', targetPage, LIST_PAGE_SIZE)
+      const data = await getList('tv', nextSort, targetPage, LIST_PAGE_SIZE, nextGenre, nextLanguage)
+      if(requestId !== tvRequestId.current) return
+      setTvGenre(nextGenre)
+      setTvLanguage(nextLanguage)
+      setTvSort(nextSort)
       const results = data?.results ?? []
       const total = typeof data?.total === 'number' ? data.total : results.length
       const resolvedPage = typeof data?.page === 'number' ? data.page : targetPage
       setTv(results)
       setTvTotal(total)
       setTvPage(Math.max(1, resolvedPage))
+      setTvReady(true)
     } catch (err) {
       console.error('Failed to load tv shows', err)
+      if(requestId !== tvRequestId.current) return
       setTv([])
       setTvTotal(0)
       setTvPage(Math.max(1, targetPage))
+      setTvReady(true)
     } finally {
-      setTvLoading(false)
+      if(requestId === tvRequestId.current){
+        setTvLoading(false)
+      }
     }
+  }
+
+  const canNavigateMoviesPrev = moviesPage > 1
+  const canNavigateMoviesNext =
+    moviesTotal !== 0 && moviesPage * LIST_PAGE_SIZE < moviesTotal
+  const canNavigateTvPrev = tvPage > 1
+  const canNavigateTvNext =
+    tvTotal !== 0 && tvPage * LIST_PAGE_SIZE < tvTotal
+
+  const goToPreviousMovies = () => {
+    if (moviesLoading || !canNavigateMoviesPrev) return
+    setMoviesTransitionType('slide')
+    setMoviesSlideDirection('right')
+    loadMovies(moviesPage - 1)
+  }
+
+  const goToNextMovies = () => {
+    if (moviesLoading || !canNavigateMoviesNext) return
+    setMoviesTransitionType('slide')
+    setMoviesSlideDirection('left')
+    loadMovies(moviesPage + 1)
+  }
+
+  const goToPreviousTv = () => {
+    if (tvLoading || !canNavigateTvPrev) return
+    setTvTransitionType('slide')
+    setTvSlideDirection('right')
+    loadTv(tvPage - 1)
+  }
+
+  const goToNextTv = () => {
+    if (tvLoading || !canNavigateTvNext) return
+    setTvTransitionType('slide')
+    setTvSlideDirection('left')
+    loadTv(tvPage + 1)
+  }
+
+  const moviesFiltersDirty = moviesPendingGenre !== moviesGenre || moviesPendingLanguage !== moviesLanguage || moviesPendingSort !== moviesSort
+  const tvFiltersDirty = tvPendingGenre !== tvGenre || tvPendingLanguage !== tvLanguage || tvPendingSort !== tvSort
+
+  const analyticsSnapshot = useMemo(() => {
+    const totalItems = summary?.total_items ?? 0
+    const totalMovies = summary?.movies ?? 0
+    const totalTvShows = summary?.tv ?? 0
+    const avgRating = summary?.avg_rating ?? 0
+    const topGenres = (summary?.top_genres ?? []).filter(Boolean)
+    const languages = (summary?.languages ?? []).filter(Boolean)
+    const languageCount = languages.length
+    const movieShare = totalItems > 0 ? Math.round((totalMovies / totalItems) * 100) : 0
+    const tvShare = totalItems > 0 ? Math.round((totalTvShows / totalItems) * 100) : 0
+    const otherShare = Math.max(0, 100 - movieShare - tvShare)
+    const highestGenreCount = topGenres.reduce((max: number, item: any) => {
+      const value = typeof item?.count === 'number' ? item.count : 0
+      return value > max ? value : max
+    }, 0)
+
+    return {
+      totalItems,
+      totalMovies,
+      totalTvShows,
+      avgRating,
+      topGenres,
+      languages,
+      languageCount,
+      movieShare,
+      tvShare,
+      otherShare,
+      highlightGenre: topGenres[0]?.genre ?? null,
+      highlightGenreCount: topGenres[0]?.count ?? 0,
+      highlightLanguage: languages[0]?.language ?? null,
+      hasContent: totalItems > 0 || topGenres.length > 0 || languages.length > 0,
+      highestGenreCount: highestGenreCount > 0 ? highestGenreCount : 1,
+    }
+  }, [summary])
+
+  const applyMoviesFilters = () => {
+    const nextGenre = moviesPendingGenre
+    const nextLanguage = moviesPendingLanguage
+    const nextSort = moviesPendingSort
+    setMoviesPage(1)
+    setMoviesAnimationKey(prev => prev + 1)
+    loadMovies(1, { genre: nextGenre, language: nextLanguage, sort: nextSort })
+  }
+
+  const applyTvFilters = () => {
+    const nextGenre = tvPendingGenre
+    const nextLanguage = tvPendingLanguage
+    const nextSort = tvPendingSort
+    setTvPage(1)
+    setTvAnimationKey(prev => prev + 1)
+    loadTv(1, { genre: nextGenre, language: nextLanguage, sort: nextSort })
   }
 
   async function load(){
@@ -411,38 +904,81 @@ export default function App() {
   }
 
   async function loadNewReleases(limit = NEW_RELEASE_FETCH_LIMIT, filter: ReleaseFilter = newReleaseFilter){
+    const requestId = ++newReleasesRequestId.current
+    const hasExistingContent = newReleases.length > 0
+    
     setNewReleasesLoading(true)
     setNewReleasesError(null)
+    
+    // If we have existing content, fade it out first
+    if (hasExistingContent) {
+      setNewReleaseTransitionType('fade')
+      setNewReleasesFadeState('fading-out')
+    }
+    
     try {
       const items = await getNewReleases(limit, filter)
-      const normalized = items.map(item => {
-        const base: any = { ...item }
-        if(typeof base.id !== 'number' && typeof base.item_id === 'number'){
-          base.id = base.item_id
-        }
-        if(!base.poster_path && base.poster_url){
-          base.poster_path = base.poster_url
-        }
-        if(base.media_type === 'show'){
-          base.media_type = 'tv'
-        }
-        return base as MediaItem
-      })
-      const sorted = normalized
-        .slice()
-        .sort((a, b) => {
-          const aTime = a.release_date ? Date.parse(a.release_date) : 0
-          const bTime = b.release_date ? Date.parse(b.release_date) : 0
-          return bTime - aTime
+      
+      // Only update if this is still the latest request
+      if (requestId === newReleasesRequestId.current) {
+        const normalized = items.map(item => {
+          const base: any = { ...item }
+          if(typeof base.id !== 'number' && typeof base.item_id === 'number'){
+            base.id = base.item_id
+          }
+          if(!base.poster_path && base.poster_url){
+            base.poster_path = base.poster_url
+          }
+          if(base.media_type === 'show'){
+            base.media_type = 'tv'
+          }
+          return base as MediaItem
         })
-      setNewReleases(sorted)
-      setNewReleasePage(0)
+        const sorted = normalized
+          .slice()
+          .sort((a, b) => {
+            const aTime = a.release_date ? Date.parse(a.release_date) : 0
+            const bTime = b.release_date ? Date.parse(b.release_date) : 0
+            return bTime - aTime
+          })
+        
+        // Wait for fade-out to complete before updating content
+        const fadeDelay = hasExistingContent ? 200 : 0
+        setTimeout(() => {
+          if (requestId === newReleasesRequestId.current) {
+            setNewReleases(sorted)
+            setNewReleasePage(0)
+            setNewReleasesLoading(false)
+            setNewReleasesFadeState('fading-in')
+            // After fade-in completes, set to visible
+            setTimeout(() => {
+              if (requestId === newReleasesRequestId.current) {
+                setNewReleasesFadeState('visible')
+              }
+            }, 300)
+          }
+        }, fadeDelay)
+      }
     } catch (err) {
       console.error('Failed to load new releases', err)
-      setNewReleases([])
-      setNewReleasesError('Unable to load new releases at the moment.')
-    } finally {
-      setNewReleasesLoading(false)
+      
+      // Only update if this is still the latest request
+      if (requestId === newReleasesRequestId.current) {
+        const fadeDelay = hasExistingContent ? 200 : 0
+        setTimeout(() => {
+          if (requestId === newReleasesRequestId.current) {
+            setNewReleases([])
+            setNewReleasesError('Unable to load new releases at the moment.')
+            setNewReleasesLoading(false)
+            setNewReleasesFadeState('fading-in')
+            setTimeout(() => {
+              if (requestId === newReleasesRequestId.current) {
+                setNewReleasesFadeState('visible')
+              }
+            }, 300)
+          }
+        }, fadeDelay)
+      }
     }
   }
 
@@ -480,21 +1016,107 @@ export default function App() {
     setDetailLoading(true)
     setView('detail')
     navigate(`/${mediaType}/${safeId}`)
-    try {
-      if(mediaType === 'movie'){
-        const data = await getMovieDetail(safeId)
-        setDetailData(data)
-      } else {
-        const data = await getShowDetail(safeId)
-        setDetailData(data)
-      }
-    } catch (err) {
-      console.error('Failed to load detail', err)
-      setDetailError('Failed to load details. Please try again.')
-    } finally {
-      setDetailLoading(false)
-    }
   }
+
+  const trimmedSearch = q.trim()
+  const shouldShowSearchDropdown = showSearchHints && trimmedSearch.length >= 2
+
+  const handleSearchFocus = () => {
+    if(searchBlurTimeout.current){
+      clearTimeout(searchBlurTimeout.current)
+    }
+    setShowSearchHints(true)
+  }
+
+  const handleSearchBlur = () => {
+    if(searchBlurTimeout.current){
+      clearTimeout(searchBlurTimeout.current)
+    }
+    searchBlurTimeout.current = window.setTimeout(() => {
+      setShowSearchHints(false)
+    }, 180)
+  }
+
+  const handleSuggestionSelect = (item: MediaItem) => {
+    const targetId = item.id ?? item.tmdb_id
+    if(!targetId){
+      return
+    }
+    setQ(item.title ?? q)
+    setShowSearchHints(false)
+    setMobileSearchOpen(false)
+    navigateToDetail(item.media_type, targetId)
+  }
+
+  const renderSearchSuggestions = () => {
+    if(!shouldShowSearchDropdown){
+      return null
+    }
+    return (
+      <div className="search-suggestions" onMouseDown={e => e.preventDefault()}>
+        {searchHintsLoading && (
+          <div className="search-suggestion-row search-suggestion-loading">
+            <span className="search-suggestion-spinner" aria-hidden="true" />
+            <span>Searching “{trimmedSearch}”…</span>
+          </div>
+        )}
+        {!searchHintsLoading && searchHints.length === 0 && (
+          <div className="search-suggestion-row search-suggestion-empty">
+            No matches found for “{trimmedSearch}”.
+          </div>
+        )}
+        {!searchHintsLoading && searchHints.map(item => (
+          <button
+            type="button"
+            key={`${item.media_type}-${item.id ?? item.tmdb_id}`}
+            className="search-suggestion-item"
+            onClick={() => handleSuggestionSelect(item)}
+          >
+            <div className="search-suggestion-thumb">
+              {item.poster_path ? (
+                <img
+                  src={`https://image.tmdb.org/t/p/w92${item.poster_path}`}
+                  alt=""
+                  loading="lazy"
+                />
+              ) : (
+                <span role="presentation">🎬</span>
+              )}
+            </div>
+            <div className="search-suggestion-body">
+              <div className="search-suggestion-title">
+                {item.title}
+              </div>
+              <div className="search-suggestion-meta">
+                <span className="search-suggestion-type">{item.media_type === 'tv' ? 'TV' : 'Movie'}</span>
+                {item.vote_average ? <span>⭐ {item.vote_average.toFixed(1)}</span> : null}
+                {item.release_date ? <span>{item.release_date}</span> : null}
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+    )
+  }
+
+  const renderSearchField = () => (
+    <div className={`header-search-shell ${shouldShowSearchDropdown ? 'open' : ''}`}>
+      <form className={`header-search ${mobileSearchOpen ? 'show' : ''}`} onSubmit={onSearch}>
+        <span className="search-icon" aria-hidden="true">🔍</span>
+        <input
+          ref={searchInputRef}
+          placeholder="Search TMDb…"
+          value={q}
+          onChange={e=>setQ(e.target.value)}
+          onFocus={handleSearchFocus}
+          onBlur={handleSearchBlur}
+          autoComplete="off"
+        />
+        <button type="submit" className="search-submit" disabled={!canSubmitSearch}>Search</button>
+      </form>
+      {renderSearchSuggestions()}
+    </div>
+  )
 
   // Lazy-load accounts only when the view is opened
   useEffect(() => {
@@ -515,6 +1137,71 @@ export default function App() {
       })()
     }
   }, [view])
+
+  useEffect(() => {
+    if(view !== 'detail'){
+      setDetailLoading(false)
+      return
+    }
+    const segments = location.pathname.split('/').filter(Boolean)
+    if(segments.length < 2){
+      setDetailError('Details unavailable for this route.')
+      setDetailLoading(false)
+      setDetailData(null)
+      return
+    }
+    const resource = segments[0]
+    const idSegment = segments[1]
+    let mediaType: 'movie' | 'tv'
+    if(resource === 'movie'){
+      mediaType = 'movie'
+    } else if(resource === 'tv' || resource === 'show'){
+      mediaType = 'tv'
+    } else {
+      setDetailError('Unknown content type.')
+      setDetailLoading(false)
+      setDetailData(null)
+      return
+    }
+    const numericId = Number.parseInt(idSegment, 10)
+    if(!Number.isFinite(numericId) || numericId <= 0){
+      setDetailError('Invalid title identifier.')
+      setDetailLoading(false)
+      setDetailData(null)
+      return
+    }
+
+    const requestId = ++detailRequestId.current
+    setDetailLoading(true)
+    setDetailError(null)
+    setDetailData(null)
+
+    ;(async () => {
+      try {
+        if(mediaType === 'movie'){
+          const data = await getMovieDetail(numericId)
+          if(requestId === detailRequestId.current){
+            setDetailData({ ...data, media_type: 'movie' })
+          }
+        } else {
+          const data = await getShowDetail(numericId)
+          if(requestId === detailRequestId.current){
+            setDetailData({ ...data, media_type: 'tv' })
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load detail', err)
+        if(requestId === detailRequestId.current){
+          setDetailError('Failed to load details. Please try again.')
+          setDetailData(null)
+        }
+      } finally {
+        if(requestId === detailRequestId.current){
+          setDetailLoading(false)
+        }
+      }
+    })()
+  }, [view, location.pathname])
 
   if(view === 'login'){
     const onSubmit = async (ev: React.FormEvent) => {
@@ -882,11 +1569,6 @@ export default function App() {
   }
 
   if(view === 'detail'){
-    const adult = detailData && isAdultContent({
-      media_type: detailData.media_type,
-      genres: detailData.genres,
-      title: detailData.title
-    })
     let chipLabel = 'TITLE'
     if(detailData?.media_type){
       chipLabel = detailData.media_type.toUpperCase()
@@ -913,22 +1595,12 @@ export default function App() {
         <div className="detail-header-shell">
           <header className={`header detail-page-header ${mobileSearchOpen ? 'header-mobile-search' : ''}`}>
             <div className="header-left">
-              <div className="brand-group">
-                <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
-                  Movie &amp; TV Analytics
-                </button>
-              </div>
-              <form className={`header-search ${mobileSearchOpen ? 'show' : ''}`} onSubmit={onSearch}>
-                <span className="search-icon" aria-hidden="true">🔍</span>
-                <input
-                  ref={searchInputRef}
-                  placeholder="Search TMDb…"
-                  value={q}
-                  onChange={e=>setQ(e.target.value)}
-                  autoComplete="off"
-                />
-                <button type="submit" className="search-submit">Search</button>
-              </form>
+            <div className="brand-group">
+              <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
+                Movie &amp; TV Analytics
+              </button>
+            </div>
+            {renderSearchField()}
               <button
                 type="button"
                 className="search-toggle"
@@ -957,21 +1629,7 @@ export default function App() {
                 ))}
               </nav>
               <div className="header-actions">
-                {currentUser && <span className="chip user-chip-blue header-user">User: {currentUser.user}</span>}
-                {!currentUser ? (
-                  <button type="button" className="btn-outline header-auth" onClick={()=>navigateToView('login')}>Log In</button>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn-outline header-auth"
-                    onClick={()=>{ 
-                      setCurrentUser(null);
-                      try { sessionStorage.removeItem('currentUser'); localStorage.removeItem('currentUser'); localStorage.removeItem('rememberUser') } catch {}
-                    }}
-                  >
-                    Log Out
-                  </button>
-                )}
+                {renderAccountControls()}
               </div>
             </div>
           </header>
@@ -1012,7 +1670,7 @@ export default function App() {
                       <img 
                         src={`https://image.tmdb.org/t/p/w500${detailData.poster_path}`} 
                         alt={detailData.title}
-                        className={`detail-poster-img${adult ? ' blurred' : ''}`}
+                        className="detail-poster-img"
                       />
                     ) : (
                       <div className="detail-poster-empty">
@@ -1020,7 +1678,6 @@ export default function App() {
                         <span>No Poster</span>
                       </div>
                     )}
-                    {adult && <div className="detail-adult-overlay-badge">18+</div>}
                   </div>
                   
                   {/* Quick Stats on Poster */}
@@ -1087,13 +1744,8 @@ export default function App() {
                   {/* Overview */}
                   <div className="detail-overview-section">
                     <h3 className="section-title">Synopsis</h3>
-                    {!adult && detailData.overview ? (
+                    {detailData.overview ? (
                       <p className="detail-synopsis">{detailData.overview}</p>
-                    ) : adult ? (
-                      <div className="detail-adult-notice">
-                        <span className="adult-icon">🔞</span>
-                        <span>Synopsis hidden for adult content</span>
-                      </div>
                     ) : (
                       <p className="detail-synopsis no-data">No synopsis available.</p>
                     )}
@@ -1156,17 +1808,7 @@ export default function App() {
               Movie &amp; TV Analytics
             </button>
           </div>
-          <form className={`header-search ${mobileSearchOpen ? 'show' : ''}`} onSubmit={onSearch}>
-            <span className="search-icon" aria-hidden="true">🔍</span>
-            <input
-              ref={searchInputRef}
-              placeholder="Search TMDb…"
-              value={q}
-              onChange={e=>setQ(e.target.value)}
-              autoComplete="off"
-            />
-            <button type="submit" className="search-submit">Search</button>
-        </form>
+          {renderSearchField()}
           <button
             type="button"
             className="search-toggle"
@@ -1195,21 +1837,7 @@ export default function App() {
             ))}
           </nav>
           <div className="header-actions">
-            {currentUser && <span className="chip user-chip-blue header-user">User: {currentUser.user}</span>}
-            {!currentUser ? (
-              <button type="button" className="btn-outline header-auth" onClick={()=>setView('login')}>Log In</button>
-            ) : (
-              <button
-                type="button"
-                className="btn-outline header-auth"
-                onClick={()=>{ 
-                  setCurrentUser(null);
-                  try { sessionStorage.removeItem('currentUser'); localStorage.removeItem('currentUser'); localStorage.removeItem('rememberUser') } catch {}
-                }}
-              >
-                Log Out
-              </button>
-            )}
+            {renderAccountControls()}
           </div>
         </div>
       </header>
@@ -1256,11 +1884,19 @@ export default function App() {
                       ? `${item.overview.slice(0, 217)}…`
                       : item.overview
                   const rating = item.tmdb_vote_avg
-                  const adult = isAdultContent(item)
+                  const targetMediaType = item.media_type === 'movie' ? 'movie' : 'tv'
+                  const handleClick = () => {
+                    navigateToDetail(targetMediaType, item.item_id || undefined)
+                  }
                   return (
-                    <div
+                    <button
                       key={`hero-${item.media_type}-${item.tmdb_id}-${idx}`}
-                      className={`trending-hero-slide${isActive ? ' active' : ''}${adult ? ' adult-slide' : ''}`}
+                      type="button"
+                      className={`trending-hero-slide${isActive ? ' active' : ''}`}
+                      onClick={handleClick}
+                      aria-label={`View ${item.title}`}
+                      tabIndex={isActive ? 0 : -1}
+                      aria-hidden={!isActive}
                     >
                       <div
                         className="trending-hero-backdrop"
@@ -1268,17 +1904,16 @@ export default function App() {
                       />
                       <div className="trending-hero-overlay" />
                       <div className="trending-hero-content">
-                        {adult && <div className="adult-content-banner">Adult content hidden</div>}
                         <div className="trending-hero-pill">{item.media_type === 'movie' ? 'Movie' : 'TV Series'}</div>
                         <h2>{item.title}</h2>
-                        <p>{adult ? 'Adult synopsis hidden.' : overview || 'No synopsis available just yet.'}</p>
+                        <p>{overview || 'No synopsis available just yet.'}</p>
                         <div className="trending-hero-meta">
                           <span>⭐ {rating != null ? rating.toFixed(1) : '—'}</span>
                           {item.release_date && <span>📅 {item.release_date}</span>}
                           {item.genres.length > 0 && <span>{item.genres.slice(0, 2).join(' • ')}</span>}
                         </div>
                       </div>
-                    </div>
+                    </button>
                   )
                 })
               )}
@@ -1335,19 +1970,32 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="trending-rail-list" key={`trending-${trendingPeriod}`}>
-                {trendingLoading && (
-                  <div className="trending-rail-empty">Loading leaderboard…</div>
+              <div 
+                className={`trending-rail-list trending-rail-list-${trendingFadeState}`}
+              >
+                {trending.length === 0 && trendingLoading && (
+                  <>
+                    {[...Array(10)].map((_, i) => (
+                      <div key={`skeleton-${i}`} className="trending-rail-item trending-rail-skeleton">
+                        <div className="rank">{i + 1}</div>
+                        <div className="thumb skeleton-box"></div>
+                        <div className="details">
+                          <div className="skeleton-line skeleton-line-title"></div>
+                          <div className="skeleton-line skeleton-line-meta"></div>
+                          <div className="skeleton-line skeleton-line-genre"></div>
+                        </div>
+                      </div>
+                    ))}
+                  </>
                 )}
-                {!trendingLoading && trending.length === 0 && (
+                {trending.length === 0 && !trendingLoading && (
                   <div className="trending-rail-empty">
                     {trendingError ?? 'Run the TMDb ETL loader to populate trending titles.'}
                   </div>
                 )}
-                {!trendingLoading && trending.map((item, index) => {
+                {trending.length > 0 && trending.map((item, index) => {
                   const poster = posterFor(item.poster_url, 'w185')
                   const genres = item.genres.length > 0 ? item.genres.slice(0, 2).join(' • ') : '—'
-                  const adult = isAdultContent(item)
                   const targetMediaType = item.media_type === 'movie' ? 'movie' : 'tv'
                   const handleClick = () => {
                     navigateToDetail(targetMediaType, item.item_id || undefined)
@@ -1356,14 +2004,13 @@ export default function App() {
                     <button
                       key={`leaderboard-${item.media_type}-${item.tmdb_id}-${index}`}
                       type="button"
-                      className={`trending-rail-item${adult ? ' trending-rail-item-adult' : ''}`}
+                      className="trending-rail-item"
                       onClick={handleClick}
                       aria-label={`View details for ${item.title}`}
                     >
                       <div className="rank">{index + 1}</div>
-                      <div className={`thumb${adult ? ' thumb-adult' : ''}`}>
+                      <div className="thumb">
                         {poster ? <img src={poster} alt={item.title} loading="lazy" /> : <div className="thumb-placeholder">🎬</div>}
-                        {adult && <div className="thumb-adult-overlay">18+</div>}
                       </div>
                       <div className="details">
                         <div className="title" title={item.title}>{item.title}</div>
@@ -1371,7 +2018,7 @@ export default function App() {
                           <span>{item.media_type === 'movie' ? 'Movie' : 'TV'}</span>
                           <span>⭐ {item.tmdb_vote_avg != null ? item.tmdb_vote_avg.toFixed(1) : '—'}</span>
                         </div>
-                        <div className="genres">{adult ? 'Restricted content' : genres}</div>
+                        <div className="genres">{genres}</div>
                       </div>
                     </button>
                   )
@@ -1426,8 +2073,8 @@ export default function App() {
               )}
             {newReleases.length > 0 && (
               <>
-                <div className="new-release-grid-wrapper">
-                  <div className="new-release-grid" key={`new-release-${newReleaseFilter}-${newReleasePage}`}>
+                <div className={`new-release-grid-wrapper ${newReleaseTransitionType === 'fade' ? `new-release-grid-wrapper-${newReleasesFadeState}` : ''}`}>
+                  <div className={`new-release-grid ${newReleaseTransitionType === 'slide' ? `new-release-grid-slide-${newReleaseSlideDirection}` : ''}`}>
                     {displayedNewReleases.map(item => (
                       <Card 
                         key={`nr-${item.media_type}-${item.tmdb_id}`} 
@@ -1436,22 +2083,27 @@ export default function App() {
                       />
                     ))}
                   </div>
-                  {newReleasesLoading && (
-                    <div className="list-overlay">Refreshing…</div>
-                  )}
                 </div>
                 {newReleaseTotalPages > 1 && (
                   <div className="pagination-controls" aria-label="New releases pagination">
                     <button
                       type="button"
-                      onClick={() => setNewReleasePage(prev => Math.max(0, prev - 1))}
+                      onClick={() => {
+                        setNewReleaseTransitionType('slide')
+                        setNewReleaseSlideDirection('right')
+                        setNewReleasePage(prev => Math.max(0, prev - 1))
+                      }}
                       disabled={newReleasesLoading || newReleasePage === 0}
                     >
                       ‹ Previous
                     </button>
                     <button
                       type="button"
-                      onClick={() => setNewReleasePage(prev => Math.min(newReleaseTotalPages - 1, prev + 1))}
+                      onClick={() => {
+                        setNewReleaseTransitionType('slide')
+                        setNewReleaseSlideDirection('left')
+                        setNewReleasePage(prev => Math.min(newReleaseTotalPages - 1, prev + 1))
+                      }}
                       disabled={newReleasesLoading || newReleasePage >= newReleaseTotalPages - 1}
                     >
                       Next ›
@@ -1473,105 +2125,376 @@ export default function App() {
       </div>
 
       {tab==='analytics' && (
-        <section>
-          <div className="stats">
-            <Stat label="Items" value={summary?.total_items ?? '–'} />
-            <Stat label="Movies" value={summary?.movies ?? '–'} />
-            <Stat label="TV" value={summary?.tv ?? '–'} />
-            <Stat label="Avg Rating" value={(summary?.avg_rating ?? 0).toFixed(1)} />
-          </div>
-
-          <h3>Top Genres</h3>
-          <div className="bars">
-            {(summary?.top_genres ?? []).map((g:any)=> (
-              <div className="bar" key={g.genre}>
-                <div className="bar-label">{g.genre || '—'}</div>
-                <div className="bar-track"><div style={{width: `${Math.min(100, g.count)}%`}}/></div>
-                <div className="bar-value">{g.count}</div>
+        <section className="analytics-section">
+          <div className="analytics-hero">
+            <div className="analytics-hero-copy">
+              <span className="analytics-kicker">Library Snapshot</span>
+              <h2>Insights &amp; Trends</h2>
+              <p>
+                {analyticsSnapshot.totalItems
+                  ? `Tracking ${analyticsSnapshot.totalItems.toLocaleString()} titles across ${analyticsSnapshot.languageCount} languages.`
+                  : 'Your catalog is ready for fresh data—run the TMDb loader to start populating insights.'}
+              </p>
+              <div className="analytics-tags">
+                {analyticsSnapshot.highlightGenre && (
+                  <span className="analytics-tag">Top genre · {analyticsSnapshot.highlightGenre}</span>
+                )}
+                {analyticsSnapshot.highlightLanguage && (
+                  <span className="analytics-tag">
+                    Most common language · {formatLanguageLabel(analyticsSnapshot.highlightLanguage) ?? analyticsSnapshot.highlightLanguage.toUpperCase()}
+                  </span>
+                )}
               </div>
-            ))}
+            </div>
+            <div className="analytics-hero-summary">
+              <span className="analytics-total-value">
+                {analyticsSnapshot.totalItems ? analyticsSnapshot.totalItems.toLocaleString() : '—'}
+              </span>
+              <span className="analytics-total-label">Titles Indexed</span>
+              <div className="analytics-total-breakdown">
+                <span>{analyticsSnapshot.totalMovies.toLocaleString()} movies</span>
+                <span>{analyticsSnapshot.totalTvShows.toLocaleString()} TV shows</span>
+              </div>
+            </div>
           </div>
 
-          <h3>Languages</h3>
-          <div className="chips">
-            {(summary?.languages ?? []).map((l:any)=> (
-              <span className="chip" key={l.language}>{l.language.toUpperCase()} · {l.count}</span>
-            ))}
+          <div className="analytics-metrics">
+            <Stat
+              label="Average Rating"
+              value={analyticsSnapshot.avgRating ? analyticsSnapshot.avgRating.toFixed(1) : '—'}
+              hint="Across all titles"
+            />
+            <Stat
+              label="Languages"
+              value={analyticsSnapshot.languageCount.toLocaleString()}
+              hint="Unique originals"
+            />
+            <Stat
+              label="Movies"
+              value={analyticsSnapshot.totalMovies.toLocaleString()}
+              hint={`${analyticsSnapshot.movieShare}% of library`}
+            />
+            <Stat
+              label="TV Series"
+              value={analyticsSnapshot.totalTvShows.toLocaleString()}
+              hint={`${analyticsSnapshot.tvShare}% of library`}
+            />
+          </div>
+
+          <div className="analytics-panels">
+            <article className="analytics-card">
+              <header className="analytics-card-header">
+                <h3>Genre Leaderboard</h3>
+                {analyticsSnapshot.highlightGenre && (
+                  <span className="analytics-card-subtitle">
+                    {analyticsSnapshot.highlightGenre} leads with {analyticsSnapshot.highlightGenreCount} titles
+                  </span>
+                )}
+              </header>
+              <div className="analytics-genre-list">
+                {analyticsSnapshot.topGenres.length > 0 ? (
+                  analyticsSnapshot.topGenres.map((g: any) => {
+                    const ratio =
+                      analyticsSnapshot.highestGenreCount > 0
+                        ? Math.min(100, Math.max(6, (g.count / analyticsSnapshot.highestGenreCount) * 100))
+                        : 0
+                    return (
+                      <div className="analytics-genre-row" key={g.genre || 'unknown'}>
+                        <span className="analytics-genre-name">{g.genre || '—'}</span>
+                        <div className="analytics-progress-bar" aria-hidden="true">
+                          <div className="analytics-progress" style={{ width: `${ratio}%` }} />
+                        </div>
+                        <span className="analytics-genre-count">{g.count ?? 0}</span>
+                      </div>
+                    )
+                  })
+                ) : (
+                  <div className="analytics-empty-card">
+                    Genre insights will appear once titles have been ingested.
+                  </div>
+                )}
+              </div>
+            </article>
+
+            <article className="analytics-card">
+              <header className="analytics-card-header">
+                <h3>Language Footprint</h3>
+                <span className="analytics-card-subtitle">
+                  {analyticsSnapshot.languageCount} languages represented
+                </span>
+              </header>
+              <div className="analytics-language-grid">
+                {analyticsSnapshot.languages.length > 0 ? (
+                  analyticsSnapshot.languages.map((l: any) => {
+                    const pretty =
+                      formatLanguageLabel(l.language) ?? l.language?.toUpperCase?.() ?? '—'
+                    return (
+                      <div className="analytics-language-chip" key={`${l.language}-${l.count}`}>
+                        <span className="analytics-language-name">{pretty}</span>
+                        <span className="analytics-language-count">{l.count}</span>
+                      </div>
+                    )
+                  })
+                ) : (
+                  <div className="analytics-empty-card">
+                    Language data appears once the library has source material.
+                  </div>
+                )}
+              </div>
+            </article>
+
+            <article className="analytics-card analytics-card-stretch">
+              <header className="analytics-card-header">
+                <h3>Format Split</h3>
+                <span className="analytics-card-subtitle">Movies vs TV inventory</span>
+              </header>
+              <div
+                className="analytics-ratio-bar"
+                role="img"
+                aria-label={`Library is ${analyticsSnapshot.movieShare}% movies and ${analyticsSnapshot.tvShare}% TV shows`}
+              >
+                <div className="analytics-ratio-segment movies" style={{ width: `${analyticsSnapshot.movieShare}%` }} />
+                <div className="analytics-ratio-segment tv" style={{ width: `${analyticsSnapshot.tvShare}%` }} />
+                {analyticsSnapshot.otherShare > 0 && (
+                  <div className="analytics-ratio-segment other" style={{ width: `${analyticsSnapshot.otherShare}%` }} />
+                )}
+              </div>
+              <div className="analytics-ratio-legend">
+                <span>
+                  <span className="analytics-dot movies" />
+                  {analyticsSnapshot.totalMovies.toLocaleString()} movies
+                </span>
+                <span>
+                  <span className="analytics-dot tv" />
+                  {analyticsSnapshot.totalTvShows.toLocaleString()} series
+                </span>
+                {analyticsSnapshot.otherShare > 0 && (
+                  <span>
+                    <span className="analytics-dot other" />
+                    {Math.max(0, analyticsSnapshot.totalItems - analyticsSnapshot.totalMovies - analyticsSnapshot.totalTvShows).toLocaleString()} other
+                  </span>
+                )}
+              </div>
+            </article>
           </div>
         </section>
       )}
 
       {tab==='movies' && (
-        <section>
-          <h3>Top Movies</h3>
-          <div className="grid">
-            {movies.map(m => (
-              <Card 
-                key={`m-${m.tmdb_id}`} 
-                item={m} 
-                onClick={() => navigateToDetail('movie', m.id!)}
-              />
-            ))}
-          </div>
-          {moviesTotal > LIST_PAGE_SIZE && (
-            <div className="pagination-controls" aria-label="Movies pagination">
+        <section className="tab-section tab-section-movies">
+          <div className="list-filters-wrapper">
+            <div className="filter-select-group">
+              <select
+                className="filter-select"
+                value={moviesPendingGenre}
+                onChange={(e) => setMoviesPendingGenre(e.target.value)}
+                disabled={moviesLoading && !moviesReady}
+              >
+                <option value="all">All Genres</option>
+                {availableGenres.map(g => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+              </select>
+              <select
+                className="filter-select"
+                value={moviesPendingLanguage}
+                onChange={(e) => setMoviesPendingLanguage(e.target.value)}
+                disabled={moviesLoading && !moviesReady}
+              >
+                <option value="all">All Languages</option>
+                {availableLanguages.map(lang => (
+                  <option key={lang} value={lang}>{lang.toUpperCase()}</option>
+                ))}
+              </select>
+              <select
+                className="filter-select"
+                value={moviesPendingSort}
+                onChange={(e) => setMoviesPendingSort(e.target.value)}
+                disabled={moviesLoading && !moviesReady}
+              >
+                <option value="popularity">Popularity</option>
+                <option value="rating">Rating</option>
+                <option value="title">Title</option>
+                <option value="release_date">Release Date</option>
+              </select>
               <button
                 type="button"
-                onClick={() => loadMovies(moviesPage - 1)}
-                disabled={moviesLoading || moviesPage <= 1}
+                className={`filter-apply-button${moviesFiltersDirty ? ' active' : ''}`}
+                onClick={applyMoviesFilters}
+                disabled={moviesLoading}
+              >
+                Search
+              </button>
+            </div>
+            <div className="filter-pagination">
+              <button
+                type="button"
+                className="filter-pagination-button"
+                onClick={goToPreviousMovies}
+                disabled={moviesLoading || !canNavigateMoviesPrev}
+                aria-label="Previous movies page"
               >
                 ‹ Previous
               </button>
               <button
                 type="button"
-                onClick={() => loadMovies(moviesPage + 1)}
-                disabled={
-                  moviesLoading ||
-                  moviesTotal === 0 ||
-                  moviesPage * LIST_PAGE_SIZE >= moviesTotal
-                }
+                className="filter-pagination-button"
+                onClick={goToNextMovies}
+                disabled={moviesLoading || !canNavigateMoviesNext}
+                aria-label="Next movies page"
               >
                 Next ›
               </button>
             </div>
-          )}
+          </div>
+          <div className={`tab-results ${moviesViewTransition === 'entering' ? 'tab-section-entering' : ''}`}>
+            {moviesReady && movies.length > 0 ? (
+              <div
+                key={moviesAnimationKey}
+                className={`grid movies-grid grid-cascade ${moviesTransitionType === 'slide' ? `movies-grid-slide-${moviesSlideDirection}` : ''}`}
+              >
+                {movies.map((m, idx) => (
+                  <Card 
+                    key={`m-${m.tmdb_id}`} 
+                    item={m} 
+                    onClick={() => navigateToDetail('movie', m.id!)}
+                    style={{ animationDelay: `${idx * 60}ms` }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="list-placeholder">
+                {moviesLoading ? 'Loading titles…' : 'No titles match your filters. Try adjusting the selections and press Search.'}
+              </div>
+            )}
+            {moviesReady && moviesTotal > LIST_PAGE_SIZE && (
+              <div className="pagination-controls" aria-label="Movies pagination">
+                <button
+                  type="button"
+                  onClick={goToPreviousMovies}
+                  disabled={moviesLoading || !canNavigateMoviesPrev}
+                >
+                  ‹ Previous
+                </button>
+                <button
+                  type="button"
+                  onClick={goToNextMovies}
+                  disabled={moviesLoading || !canNavigateMoviesNext}
+                >
+                  Next ›
+                </button>
+              </div>
+            )}
+          </div>
         </section>
       )}
 
       {tab==='tv' && (
-        <section>
-          <h3>Top TV</h3>
-          <div className="grid">
-            {tv.map(m => (
-              <Card 
-                key={`t-${m.tmdb_id}`} 
-                item={m} 
-                onClick={() => navigateToDetail('tv', m.id!)}
-              />
-            ))}
-          </div>
-          {tvTotal > LIST_PAGE_SIZE && (
-            <div className="pagination-controls" aria-label="TV pagination">
+        <section className="tab-section tab-section-tv">
+          <div className="list-filters-wrapper">
+            <div className="filter-select-group">
+              <select
+                className="filter-select"
+                value={tvPendingGenre}
+                onChange={(e) => setTvPendingGenre(e.target.value)}
+                disabled={tvLoading && !tvReady}
+              >
+                <option value="all">All Genres</option>
+                {availableGenres.map(g => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+              </select>
+              <select
+                className="filter-select"
+                value={tvPendingLanguage}
+                onChange={(e) => setTvPendingLanguage(e.target.value)}
+                disabled={tvLoading && !tvReady}
+              >
+                <option value="all">All Languages</option>
+                {availableLanguages.map(lang => (
+                  <option key={lang} value={lang}>{lang.toUpperCase()}</option>
+                ))}
+              </select>
+              <select
+                className="filter-select"
+                value={tvPendingSort}
+                onChange={(e) => setTvPendingSort(e.target.value)}
+                disabled={tvLoading && !tvReady}
+              >
+                <option value="popularity">Popularity</option>
+                <option value="rating">Rating</option>
+                <option value="title">Title</option>
+                <option value="release_date">Release Date</option>
+              </select>
               <button
                 type="button"
-                onClick={() => loadTv(tvPage - 1)}
-                disabled={tvLoading || tvPage <= 1}
+                className={`filter-apply-button${tvFiltersDirty ? ' active' : ''}`}
+                onClick={applyTvFilters}
+                disabled={tvLoading}
+              >
+                Search
+              </button>
+            </div>
+            <div className="filter-pagination">
+              <button
+                type="button"
+                className="filter-pagination-button"
+                onClick={goToPreviousTv}
+                disabled={tvLoading || !canNavigateTvPrev}
+                aria-label="Previous TV page"
               >
                 ‹ Previous
               </button>
               <button
                 type="button"
-                onClick={() => loadTv(tvPage + 1)}
-                disabled={
-                  tvLoading ||
-                  tvTotal === 0 ||
-                  tvPage * LIST_PAGE_SIZE >= tvTotal
-                }
+                className="filter-pagination-button"
+                onClick={goToNextTv}
+                disabled={tvLoading || !canNavigateTvNext}
+                aria-label="Next TV page"
               >
                 Next ›
               </button>
             </div>
-          )}
+          </div>
+          <div className={`tab-results ${tvViewTransition === 'entering' ? 'tab-section-entering' : ''}`}>
+            {tvReady && tv.length > 0 ? (
+              <div
+                key={tvAnimationKey}
+                className={`grid tv-grid grid-cascade ${tvTransitionType === 'slide' ? `tv-grid-slide-${tvSlideDirection}` : ''}`}
+              >
+                {tv.map((m, idx) => (
+                  <Card 
+                    key={`t-${m.tmdb_id}`} 
+                    item={m} 
+                    onClick={() => navigateToDetail('tv', m.id!)}
+                    style={{ animationDelay: `${idx * 60}ms` }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="list-placeholder">
+                {tvLoading ? 'Loading titles…' : 'No titles match your filters. Try adjusting the selections and press Search.'}
+              </div>
+            )}
+            {tvReady && tvTotal > LIST_PAGE_SIZE && (
+              <div className="pagination-controls" aria-label="TV pagination">
+                <button
+                  type="button"
+                  onClick={goToPreviousTv}
+                  disabled={tvLoading || !canNavigateTvPrev}
+                >
+                  ‹ Previous
+                </button>
+                <button
+                  type="button"
+                  onClick={goToNextTv}
+                  disabled={tvLoading || !canNavigateTvNext}
+                >
+                  Next ›
+                </button>
+              </div>
+            )}
+          </div>
         </section>
       )}
 

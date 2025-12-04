@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS movies (
     runtime_min     INTEGER,
     overview        TEXT,
     poster_path     TEXT,
+    backdrop_path   TEXT,
+    original_language TEXT,
     tmdb_vote_avg   REAL,
     popularity      REAL,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP
@@ -31,6 +33,8 @@ CREATE TABLE IF NOT EXISTS shows (
     last_air_date   TEXT,
     overview        TEXT,
     poster_path     TEXT,
+    backdrop_path   TEXT,
+    original_language TEXT,
     tmdb_vote_avg   REAL,
     popularity      REAL,
     created_at      TEXT DEFAULT CURRENT_TIMESTAMP
