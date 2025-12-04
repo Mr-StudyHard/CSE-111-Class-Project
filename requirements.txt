@@ -1,6 +1,6 @@
 flask
+flask-cors
 python-dotenv
-sqlalchemy
-psycopg2-binary
-alembic
 requests
+APScheduler==3.10.4
+PyYAML==6.0.1

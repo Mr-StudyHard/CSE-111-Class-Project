@@ -1,0 +1,14 @@
+nohup: ignoring input
+Traceback (most recent call last):
+  File "C:\Users\Ak407\OneDrive\CSE 111 Project\movie-tv-analytics\run_server.py", line 12, in <module>
+    from app import create_app
+  File "C:\Users\Ak407\OneDrive\CSE 111 Project\movie-tv-analytics\app\__init__.py", line 3, in <module>
+    from flask_cors import CORS
+ModuleNotFoundError: No module named 'flask_cors'
+[run_server] Failed to import app:create_app
+Traceback (most recent call last):
+  File "C:\Users\Ak407\OneDrive\CSE 111 Project\movie-tv-analytics\run_server.py", line 12, in <module>
+    from app import create_app
+  File "C:\Users\Ak407\OneDrive\CSE 111 Project\movie-tv-analytics\app\__init__.py", line 3, in <module>
+    from flask_cors import CORS
+ModuleNotFoundError: No module named 'flask_cors'

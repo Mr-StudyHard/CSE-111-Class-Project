@@ -1,0 +1,36 @@
+[Unit]
+Description=TMDb ETL Scheduler Service
+After=network.target
+Documentation=https://github.com/your-repo/movie-tv-analytics
+
+[Service]
+Type=simple
+User=your-username
+Group=your-usergroup
+WorkingDirectory=/path/to/movie-tv-analytics
+Environment="PATH=/path/to/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="TMDB_API_KEY=your_api_key_here"
+Environment="DATABASE_PATH=/path/to/movie-tv-analytics/movie_tracker.db"
+
+# Main command to run
+ExecStart=/path/to/venv/bin/python run_etl_scheduler.py --config etl_config.yaml
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tmdb-etl-scheduler
+
+# Security settings (optional but recommended)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/path/to/movie-tv-analytics
+
+[Install]
+WantedBy=multi-user.target
+
