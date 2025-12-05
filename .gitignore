@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.env
+*.pyc
+.DS_Store
+app.db
+movie_tracker.db
+web/node_modules/
+imageofmovie/*
+!imageofmovie/.gitkeep
