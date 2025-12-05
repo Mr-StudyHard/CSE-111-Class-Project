@@ -6,3 +6,5 @@ __pycache__/
 app.db
 movie_tracker.db
 web/node_modules/
+imageofmovie/*
+!imageofmovie/.gitkeep

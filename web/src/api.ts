@@ -92,6 +92,22 @@ export async function getUsers() {
 	return data as UserRow[]
 }
 
+export async function getUserByEmail(email: string) {
+	try {
+		const { data } = await api.get('/user/by-email', { params: { email } })
+		// Backend returns {ok: true, user_id, email} on success or {ok: false, error} on failure
+		if(data.ok) {
+			return data as { ok: boolean; user_id?: number; email?: string; error?: string }
+		} else {
+			return { ok: false, error: data.error || 'User not found' }
+		}
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to get user'
+		return { ok: false, error: String(msg) }
+	}
+}
+
 export async function getHealth() {
 	const { data } = await api.get('/health')
 	return data as { status: string }
@@ -107,7 +123,7 @@ export async function getNewReleases(limit = 12, type: 'all' | 'movie' | 'tv' = 
 	return (data?.results ?? []) as MediaItem[]
 }
 
-export type LoginResponse = { ok: true; user: string; email: string } | { ok: false; error: string }
+export type LoginResponse = { ok: true; user: string; email: string; user_id?: number } | { ok: false; error: string }
 
 export async function login(email: string, password: string) {
 	try {
@@ -181,4 +197,176 @@ export async function getMovieDetail(movieId: number) {
 export async function getShowDetail(showId: number) {
 	const { data } = await api.get(`/show/${showId}`)
 	return data as ShowDetail
+}
+
+export async function uploadImage(file: File) {
+	const formData = new FormData()
+	formData.append('file', file)
+	const { data } = await api.post('/upload-image', formData, {
+		headers: {
+			'Content-Type': 'multipart/form-data',
+		},
+	})
+	return data as { ok: boolean; path?: string; error?: string }
+}
+
+export async function deleteMedia(mediaType: 'movie' | 'tv', id: number) {
+	// Validate ID
+	if (id === undefined || id === null || isNaN(Number(id))) {
+		return { ok: false, error: `Invalid ID: ${id}` }
+	}
+	
+	try {
+		const path = mediaType === 'movie' ? `/movies/${id}` : `/tv/${id}`
+		const fullUrl = `${api.defaults.baseURL}${path}`
+		console.log(`[deleteMedia] Calling DELETE ${fullUrl} for ${mediaType} with id ${id}`)
+		const { data } = await api.delete(path)
+		return data as { ok: boolean; deleted?: number; error?: string }
+	} catch (err: any) {
+		console.error(`[deleteMedia] Error deleting ${mediaType} ${id}:`, err)
+		const status = err?.response?.status
+		const statusText = err?.response?.statusText
+		const errorData = err?.response?.data
+		
+		let msg = 'Delete request failed'
+		if (status === 404) {
+			msg = errorData?.error || `Item with ID ${id} not found (404)`
+		} else if (errorData?.error) {
+			msg = errorData.error
+		} else if (err?.message) {
+			msg = err.message
+		}
+		
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function getReviews(targetType: 'movie' | 'show', targetId: number) {
+	try {
+		const { data } = await api.get('/reviews', {
+			params: { target_type: targetType, target_id: targetId }
+		})
+		return data as ReviewResponse
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to fetch reviews'
+		return { ok: false, reviews: [], count: 0, error: String(msg) }
+	}
+}
+
+export async function createReview(userId: number, targetType: 'movie' | 'show', targetId: number, content: string, rating?: number) {
+	try {
+		const { data } = await api.post('/reviews', {
+			user_id: userId,
+			target_type: targetType,
+			target_id: targetId,
+			content: content,
+			rating: rating
+		})
+		return data as { ok: boolean; review_id?: number; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to create review'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function updateMedia(mediaType: 'movie' | 'tv', id: number, payload: UpdateMediaPayload) {
+	try {
+		const path = mediaType === 'movie' ? `/movies/${id}` : `/tv/${id}`
+		const { data } = await api.put(path, payload)
+		return data as { ok: boolean; id?: number; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Update request failed'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function copyMedia(mediaType: 'movie' | 'tv', id: number) {
+	// Validate ID
+	if (id === undefined || id === null || isNaN(Number(id))) {
+		return { ok: false, error: `Invalid ID: ${id}` }
+	}
+	
+	try {
+		// Fetch the original item details
+		const detail = mediaType === 'movie' 
+			? await getMovieDetail(id)
+			: await getShowDetail(id)
+		
+		// Extract the first genre (required field)
+		const genres = detail.genres || []
+		const genre = genres.length > 0 ? genres[0] : 'Drama' // Default genre if none found
+		
+		// Prepare payload for creating a copy
+		const payload: CreateMediaPayload = {
+			media_type: mediaType,
+			title: detail.title,
+			overview: detail.overview || undefined,
+			language: detail.original_language || undefined,
+			poster_path: detail.poster_path || undefined,
+			tmdb_score: detail.vote_average || undefined,
+			popularity: detail.popularity || undefined,
+			genre: genre,
+		}
+		
+		// Add year field based on media type
+		if (mediaType === 'movie') {
+			const movieDetail = detail as MovieDetail
+			if (movieDetail.release_year) {
+				payload.release_year = movieDetail.release_year
+			}
+		} else {
+			const showDetail = detail as ShowDetail
+			if (showDetail.first_air_date) {
+				// Extract year from date string (YYYY-MM-DD or YYYY)
+				const yearMatch = showDetail.first_air_date.match(/^(\d{4})/)
+				if (yearMatch) {
+					payload.first_air_year = parseInt(yearMatch[1])
+				}
+			}
+		}
+		
+		// Create the copy
+		const result = await createMedia(payload)
+		return result
+	} catch (err: any) {
+		console.error(`[copyMedia] Error copying ${mediaType} ${id}:`, err)
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Copy request failed'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export type CreateMediaPayload = {
+	media_type: 'movie' | 'tv'
+	title: string
+	overview?: string
+	language?: string
+	release_year?: number
+	first_air_year?: number
+	tmdb_score?: number
+	popularity?: number
+	poster_path?: string
+	genre: string
+}
+
+export type UpdateMediaPayload = {
+	title?: string
+	overview?: string
+	language?: string
+	release_year?: number
+	first_air_year?: number
+	tmdb_score?: number
+	popularity?: number
+	poster_path?: string
+	genre?: string
+}
+
+export async function createMedia(payload: CreateMediaPayload) {
+	const path = payload.media_type === 'movie' ? '/movies' : '/tv'
+	const { media_type, ...body } = payload
+	const { data } = await api.post(path, body)
+	return data as { ok: boolean; id?: number; tmdb_id?: number; title?: string; error?: string }
 }

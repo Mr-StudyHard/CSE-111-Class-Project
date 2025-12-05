@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, type Review, getUserByEmail } from './api'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
 type ReleaseFilter = 'all' | 'movie' | 'tv'
 
@@ -27,14 +27,63 @@ const formatLanguageLabel = (code?: string | null) => {
   return normalized.toUpperCase()
 }
 
-function Card({item, onClick, style}:{item:MediaItem; onClick?: () => void; style?: CSSProperties}){
-  const img = item.poster_path ? `https://image.tmdb.org/t/p/w300${item.poster_path}` : undefined
+const getImageUrl = (path?: string | null, size: 'w92' | 'w185' | 'w300' | 'w500' | 'w780' = 'w300') => {
+  if(!path) return undefined
+  // If it's a local path (starts with imageofmovie/), use the API endpoint
+  if(path.startsWith('imageofmovie/')) {
+    return `/api/images/${path.replace('imageofmovie/', '')}`
+  }
+  // Otherwise, treat as TMDb path
+  return `https://image.tmdb.org/t/p/${size}${path}`
+}
+
+function Card({
+  item, 
+  onClick, 
+  style,
+  selectionMode = false,
+  selected = false,
+  onSelectChange
+}:{
+  item:MediaItem
+  onClick?: () => void
+  style?: CSSProperties
+  selectionMode?: boolean
+  selected?: boolean
+  onSelectChange?: (selected: boolean) => void
+}){
+  const img = getImageUrl(item.poster_path, 'w300')
+  const handleCardClick = (e: React.MouseEvent) => {
+    if(selectionMode && onSelectChange){
+      e.stopPropagation()
+      onSelectChange(!selected)
+    } else if(onClick){
+      onClick()
+    }
+  }
+  const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.stopPropagation()
+    if(onSelectChange){
+      onSelectChange(e.target.checked)
+    }
+  }
   return (
     <div
-      className={`card${onClick ? ' card-clickable' : ''}`}
-      onClick={onClick}
+      className={`card${onClick && !selectionMode ? ' card-clickable' : ''}${selectionMode ? ' card-selection-mode' : ''}${selected ? ' card-selected' : ''}`}
+      onClick={handleCardClick}
       style={style}
     >
+      {selectionMode && (
+        <div className="card-checkbox-wrapper" onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            className="card-checkbox"
+            checked={selected}
+            onChange={handleCheckboxChange}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
       <div className="card-media">
         {img ? <img src={img} alt={item.title} loading="lazy"/> : <div className="noimg">No image</div>}
       </div>
@@ -80,6 +129,7 @@ export default function App() {
     if (path === '/login') return 'login'
     if (path === '/signup') return 'signup'
     if (path === '/accounts') return 'accounts'
+    if (path === '/add') return 'add'
     if (path.startsWith('/movie/') || path.startsWith('/show/')) return 'detail'
     return 'app'
   }
@@ -149,7 +199,7 @@ export default function App() {
   const [newReleaseTransitionType, setNewReleaseTransitionType] = useState<'fade' | 'slide' | 'none'>('none')
   const newReleasesRequestId = useRef(0)
   // Remember-me support: if a profile was stored and flag set, restore it.
-  const [currentUser, setCurrentUser] = useState<{user:string;email:string}|null>(() => {
+  const [currentUser, setCurrentUser] = useState<{user:string;email:string;user_id?:number}|null>(() => {
     try {
       const rawSession = sessionStorage.getItem('currentUser')
       if(rawSession){
@@ -175,12 +225,47 @@ export default function App() {
   const [detailData, setDetailData] = useState<MovieDetail | ShowDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [detailEditMode, setDetailEditMode] = useState(false)
+  const [editTitle, setEditTitle] = useState('')
+  const [editOverview, setEditOverview] = useState('')
+  const [editLanguage, setEditLanguage] = useState('')
+  const [editYear, setEditYear] = useState('')
+  const [editTmdbScore, setEditTmdbScore] = useState('')
+  const [editPopularity, setEditPopularity] = useState('')
+  const [editGenre, setEditGenre] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
+  const [reviews, setReviews] = useState<Review[]>([])
+  const [reviewsLoading, setReviewsLoading] = useState(false)
+  const [reviewText, setReviewText] = useState('')
+  const [reviewSubmitting, setReviewSubmitting] = useState(false)
   const [moviesAnimationKey, setMoviesAnimationKey] = useState(0)
   const [tvAnimationKey, setTvAnimationKey] = useState(0)
   const moviesRequestId = useRef(0)
   const tvRequestId = useRef(0)
   const [moviesReady, setMoviesReady] = useState(false)
   const [tvReady, setTvReady] = useState(false)
+  const [moviesSelectionMode, setMoviesSelectionMode] = useState(false)
+  const [moviesSelected, setMoviesSelected] = useState<Set<number>>(new Set())
+  const [moviesDeleting, setMoviesDeleting] = useState(false)
+  const [moviesCopying, setMoviesCopying] = useState(false)
+  const [tvSelectionMode, setTvSelectionMode] = useState(false)
+  const [tvSelected, setTvSelected] = useState<Set<number>>(new Set())
+  const [tvDeleting, setTvDeleting] = useState(false)
+  const [tvCopying, setTvCopying] = useState(false)
+  const [addMediaType, setAddMediaType] = useState<'movie' | 'tv'>('movie')
+  const [addTitle, setAddTitle] = useState('')
+  const [addOverview, setAddOverview] = useState('')
+  const [addLanguage, setAddLanguage] = useState('')
+  const [addYear, setAddYear] = useState('')
+  const [addTmdbScore, setAddTmdbScore] = useState('')
+  const [addPopularity, setAddPopularity] = useState('')
+  const [addPosterPath, setAddPosterPath] = useState('')
+  const [addGenre, setAddGenre] = useState('')
+  const [addSubmitting, setAddSubmitting] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
+  const [addPosterPreview, setAddPosterPreview] = useState<string | null>(null)
+  const [addPosterFile, setAddPosterFile] = useState<File | null>(null)
+  const addPosterInputRef = useRef<HTMLInputElement | null>(null)
   const primaryNav = [
     { id: 'analytics', label: 'Analytics' },
     { id: 'movies', label: 'Movies' },
@@ -212,6 +297,8 @@ export default function App() {
       setView('signup')
     } else if (path === '/accounts') {
       setView('accounts')
+    } else if (path === '/add') {
+      setView('add')
     } else if (path.startsWith('/movie/') || path.startsWith('/show/')) {
       setView('detail')
     }
@@ -253,9 +340,13 @@ export default function App() {
     if(newTab !== tab){
       if(newTab === 'movies'){
         resetMoviesState()
+        setMoviesSelectionMode(false)
+        setMoviesSelected(new Set())
         loadMovies(1)
       } else if(newTab === 'tv'){
         resetTvState()
+        setTvSelectionMode(false)
+        setTvSelected(new Set())
         loadTv(1)
       }
     }
@@ -268,6 +359,8 @@ export default function App() {
     setView(newView)
     if(newView === 'app') {
       navigate('/')
+    } else if (newView === 'add') {
+      navigate('/add')
     } else {
       navigate(`/${newView}`)
     }
@@ -356,6 +449,21 @@ export default function App() {
               <span className="menu-content">
                 <span className="menu-title">User Settings</span>
                 <span className="menu-subtitle">Coming soon</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              className="account-menu-item"
+              role="menuitem"
+              onClick={() => {
+                setAccountMenuOpen(false)
+                navigateToView('add')
+              }}
+            >
+              <span className="menu-icon" aria-hidden="true">🎬</span>
+              <span className="menu-content">
+                <span className="menu-title">Add Movie/TV</span>
+                <span className="menu-subtitle">Go to catalog to add a title</span>
               </span>
             </button>
             <div className="account-menu-separator" role="none" />
@@ -1075,7 +1183,7 @@ export default function App() {
             <div className="search-suggestion-thumb">
               {item.poster_path ? (
                 <img
-                  src={`https://image.tmdb.org/t/p/w92${item.poster_path}`}
+                  src={getImageUrl(item.poster_path, 'w92')}
                   alt=""
                   loading="lazy"
                 />
@@ -1182,11 +1290,46 @@ export default function App() {
           const data = await getMovieDetail(numericId)
           if(requestId === detailRequestId.current){
             setDetailData({ ...data, media_type: 'movie' })
+            // Initialize edit fields
+            setEditTitle(data.title || '')
+            setEditOverview(data.overview || '')
+            setEditLanguage(data.original_language || '')
+            setEditYear(data.release_year?.toString() || '')
+            setEditTmdbScore(data.vote_average?.toString() || '')
+            setEditPopularity(data.popularity?.toString() || '')
+            // Join all genres with comma and space
+            setEditGenre(data.genres?.join(', ') || '')
+            setDetailEditMode(false)
+            // Load reviews
+            setReviewsLoading(true)
+            const reviewsData = await getReviews('movie', numericId)
+            if(requestId === detailRequestId.current){
+              setReviews(reviewsData.reviews || [])
+              setReviewsLoading(false)
+            }
           }
         } else {
           const data = await getShowDetail(numericId)
           if(requestId === detailRequestId.current){
             setDetailData({ ...data, media_type: 'tv' })
+            // Initialize edit fields
+            setEditTitle(data.title || '')
+            setEditOverview(data.overview || '')
+            setEditLanguage(data.original_language || '')
+            const yearMatch = data.first_air_date?.match(/^(\d{4})/)
+            setEditYear(yearMatch ? yearMatch[1] : '')
+            setEditTmdbScore(data.vote_average?.toString() || '')
+            setEditPopularity(data.popularity?.toString() || '')
+            // Join all genres with comma and space
+            setEditGenre(data.genres?.join(', ') || '')
+            setDetailEditMode(false)
+            // Load reviews
+            setReviewsLoading(true)
+            const reviewsData = await getReviews('show', numericId)
+            if(requestId === detailRequestId.current){
+              setReviews(reviewsData.reviews || [])
+              setReviewsLoading(false)
+            }
           }
         }
       } catch (err) {
@@ -1216,7 +1359,7 @@ export default function App() {
         }
         const res = await login(email.trim(), password)
         if(res.ok){
-          const profile = { user: (res as any).user, email: (res as any).email }
+          const profile = { user: (res as any).user, email: (res as any).email, user_id: (res as any).user_id }
           setCurrentUser(profile)
           try {
             sessionStorage.setItem('currentUser', JSON.stringify(profile))
@@ -1465,14 +1608,11 @@ export default function App() {
 
   // Auth landing page (Log in / Sign Up)
   const posterFor = (path?: string | null, size: 'w185' | 'w342' | 'w500' | 'w780' = 'w185') => {
-    if(!path) return undefined
-    if(path.startsWith('http')) return path
-    const normalized = path.startsWith('/') ? path : `/${path}`
-    return `https://image.tmdb.org/t/p/${size}${normalized}`
+    return getImageUrl(path, size)
   }
 
   const backdropFor = (path?: string | null) => {
-    return posterFor(path, 'w780')
+    return getImageUrl(path, 'w780')
   }
 
   if(view === 'auth'){
@@ -1568,6 +1708,292 @@ export default function App() {
     )
   }
 
+  if(view === 'add'){
+    const handlePosterFile = (file: File | null) => {
+      if(!file) {
+        setAddPosterFile(null)
+        if(addPosterPreview){
+          URL.revokeObjectURL(addPosterPreview)
+        }
+        setAddPosterPreview(null)
+        return
+      }
+      if(addPosterPreview){
+        URL.revokeObjectURL(addPosterPreview)
+      }
+      const url = URL.createObjectURL(file)
+      setAddPosterPreview(url)
+      setAddPosterFile(file)
+    }
+
+    const handlePosterInputChange = (ev: React.ChangeEvent<HTMLInputElement>) => {
+      const file = ev.target.files?.[0] ?? null
+      handlePosterFile(file)
+    }
+
+    const handlePosterDrop = (ev: React.DragEvent<HTMLDivElement>) => {
+      ev.preventDefault()
+      ev.stopPropagation()
+      const file = ev.dataTransfer.files?.[0] ?? null
+      handlePosterFile(file)
+    }
+
+    const handlePosterDragOver = (ev: React.DragEvent<HTMLDivElement>) => {
+      ev.preventDefault()
+    }
+
+    const onSubmitAdd = async (ev: React.FormEvent) => {
+      ev.preventDefault()
+      setAddError(null)
+      if(!addTitle.trim()){
+        setAddError('Title is required.')
+        return
+      }
+      if(!addGenre.trim()){
+        setAddError('Please provide a genre for this title.')
+        return
+      }
+      setAddSubmitting(true)
+      try{
+        // Upload image file if one was selected
+        let posterPath = addPosterPath.trim() || undefined
+        if(addPosterFile){
+          const uploadRes = await uploadImage(addPosterFile)
+          if(!uploadRes.ok){
+            setAddError(uploadRes.error || 'Failed to upload image. Please try again.')
+            setAddSubmitting(false)
+            return
+          }
+          posterPath = uploadRes.path
+        }
+
+        const payload: any = {
+          media_type: addMediaType,
+          title: addTitle.trim(),
+          overview: addOverview.trim() || undefined,
+          language: addLanguage.trim() || undefined,
+          tmdb_score: addTmdbScore.trim() ? Number(addTmdbScore) : undefined,
+          popularity: addPopularity.trim() ? Number(addPopularity) : undefined,
+          poster_path: posterPath,
+          genre: addGenre.trim(),
+        }
+        if(addYear.trim()){
+          const yearNum = Number(addYear)
+          if(Number.isNaN(yearNum)){
+            setAddError('Year must be a number (e.g., 2024).')
+            setAddSubmitting(false)
+            return
+          }
+          if(addMediaType === 'movie'){
+            payload.release_year = yearNum
+          } else {
+            payload.first_air_year = yearNum
+          }
+        }
+        const res = await createMedia(payload)
+        if(!res.ok){
+          setAddError(res.error || 'Could not save title. Please try again.')
+          return
+        }
+        // Reset form and take user back to Movies or TV tab, then reload list.
+        const targetTab = addMediaType === 'movie' ? 'movies' : 'tv'
+        setAddTitle('')
+        setAddOverview('')
+        setAddLanguage('')
+        setAddYear('')
+        setAddTmdbScore('')
+        setAddPopularity('')
+        setAddPosterPath('')
+        if(addPosterPreview){
+          URL.revokeObjectURL(addPosterPreview)
+        }
+        setAddPosterPreview(null)
+        setAddPosterFile(null)
+        setAddGenre('')
+        setAddMediaType('movie')
+        navigateToTab(targetTab)
+      } catch (err:any){
+        setAddError(err?.message || 'Unexpected error while saving title.')
+      } finally {
+        setAddSubmitting(false)
+      }
+    }
+
+    return (
+      <div className="container add-media-container">
+        <header className="header">
+          <div className="header-left">
+            <div className="brand-group">
+              <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
+                Movie &amp; TV Analytics
+              </button>
+            </div>
+          </div>
+          <div className="header-right">
+            <div className="header-actions">
+              {renderAccountControls()}
+            </div>
+          </div>
+        </header>
+
+        <section className="add-media-layout">
+          <div className="add-media-poster">
+            <div
+              className="poster-dropzone"
+              onClick={() => addPosterInputRef.current?.click()}
+              onDrop={handlePosterDrop}
+              onDragOver={handlePosterDragOver}
+            >
+              {addPosterPreview ? (
+                <img src={addPosterPreview} alt="Selected poster" className="poster-preview-image" />
+              ) : (
+                <span>Drag photo of movie or TV show here, or click to choose</span>
+              )}
+              <input
+                ref={addPosterInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={handlePosterInputChange}
+              />
+            </div>
+            <div className="poster-score-card">
+              <div className="poster-score-label">TMDb Score</div>
+              <input
+                className="form-input"
+                type="number"
+                step="0.1"
+                min="0"
+                max="10"
+                value={addTmdbScore}
+                onChange={e=>setAddTmdbScore(e.target.value)}
+                placeholder="e.g. 7.8"
+              />
+            </div>
+          </div>
+
+          <form className="add-media-form" onSubmit={onSubmitAdd}>
+            <div className="add-media-type-toggle">
+              <button
+                type="button"
+                className={addMediaType === 'movie' ? 'active' : ''}
+                onClick={()=> setAddMediaType('movie')}
+              >
+                Movie
+              </button>
+              <button
+                type="button"
+                className={addMediaType === 'tv' ? 'active' : ''}
+                onClick={()=> setAddMediaType('tv')}
+              >
+                TV
+              </button>
+            </div>
+
+            {addError && (
+              <div className="auth-error-message" style={{marginBottom: 16}}>
+                <span className="error-icon">⚠️</span>
+                <span>{addError}</span>
+              </div>
+            )}
+
+            <div className="form-group">
+              <label className="form-label">Title</label>
+              <input
+                className="form-input"
+                value={addTitle}
+                onChange={e=>setAddTitle(e.target.value)}
+                placeholder="Enter title"
+                required
+              />
+            </div>
+
+            <div className="add-media-inline-row">
+              <div className="form-group">
+                <label className="form-label">Year</label>
+                <input
+                  className="form-input"
+                  value={addYear}
+                  onChange={e=>setAddYear(e.target.value)}
+                  placeholder="e.g. 2024"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Language</label>
+                <input
+                  className="form-input"
+                  value={addLanguage}
+                  onChange={e=>setAddLanguage(e.target.value)}
+                  placeholder="e.g. en"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Popularity</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  step="0.1"
+                  value={addPopularity}
+                  onChange={e=>setAddPopularity(e.target.value)}
+                  placeholder="e.g. 25.3"
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Genre</label>
+              <input
+                className="form-input"
+                value={addGenre}
+                onChange={e=>setAddGenre(e.target.value)}
+                placeholder="e.g. Drama"
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Poster Path / URL</label>
+              <input
+                className="form-input"
+                value={addPosterPath}
+                onChange={e=>setAddPosterPath(e.target.value)}
+                placeholder="/path/on/tmdb.jpg or https://…"
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Synopsis</label>
+              <textarea
+                className="form-input"
+                rows={4}
+                value={addOverview}
+                onChange={e=>setAddOverview(e.target.value)}
+                placeholder="Describe the movie or TV show"
+              />
+            </div>
+
+            <div className="add-media-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={()=> navigateToTab('movies')}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                type="submit"
+                disabled={addSubmitting}
+              >
+                {addSubmitting ? 'Saving…' : 'Submit'}
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+    )
+  }
+
   if(view === 'detail'){
     let chipLabel = 'TITLE'
     if(detailData?.media_type){
@@ -1654,7 +2080,7 @@ export default function App() {
             {/* Backdrop Hero Section */}
             <div className="detail-backdrop" style={{
               backgroundImage: detailData.backdrop_path 
-                ? `url(https://image.tmdb.org/t/p/original${detailData.backdrop_path})`
+                ? `url(${getImageUrl(detailData.backdrop_path, 'w780')})`
                 : 'linear-gradient(135deg, #1a1a1f 0%, #0d0d10 100%)'
             }}>
               <div className="detail-backdrop-overlay"></div>
@@ -1668,7 +2094,7 @@ export default function App() {
                   <div className="detail-poster-wrapper">
                     {detailData.poster_path ? (
                       <img 
-                        src={`https://image.tmdb.org/t/p/w500${detailData.poster_path}`} 
+                        src={getImageUrl(detailData.poster_path, 'w500')} 
                         alt={detailData.title}
                         className="detail-poster-img"
                       />
@@ -1698,58 +2124,238 @@ export default function App() {
                 {/* Info Panel */}
                 <div className="detail-info-panel">
                   <div className="detail-heading">
-                    <div className="detail-type-badge">{chipLabel}</div>
-                    <h1 className="detail-main-title">{detailData.title}</h1>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%' }}>
+                      <div>
+                        <div className="detail-type-badge">{chipLabel}</div>
+                        {detailEditMode ? (
+                          <input
+                            type="text"
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            className="detail-edit-input detail-edit-title"
+                            placeholder="Title"
+                          />
+                        ) : (
+                          <h1 className="detail-main-title">{detailData.title}</h1>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className={`detail-edit-button ${detailEditMode ? 'detail-edit-button-active' : ''}`}
+                        onClick={async () => {
+                          if(detailEditMode) {
+                            // Save changes
+                            if(!detailData) return
+                            setEditSaving(true)
+                            try {
+                              const payload: UpdateMediaPayload = {
+                                title: editTitle || undefined,
+                                overview: editOverview || undefined,
+                                language: editLanguage || undefined,
+                                tmdb_score: editTmdbScore ? parseFloat(editTmdbScore) : undefined,
+                                popularity: editPopularity ? parseFloat(editPopularity) : undefined,
+                                genre: editGenre || undefined,
+                              }
+                              
+                              if(detailData.media_type === 'movie') {
+                                const movieDetail = detailData as MovieDetail
+                                if(editYear) {
+                                  payload.release_year = parseInt(editYear)
+                                }
+                                const result = await updateMedia('movie', movieDetail.movie_id, payload)
+                                if(!result.ok) {
+                                  alert(`Failed to update: ${result.error}`)
+                                  return
+                                }
+                              } else {
+                                const showDetail = detailData as ShowDetail
+                                if(editYear) {
+                                  payload.first_air_year = parseInt(editYear)
+                                }
+                                const result = await updateMedia('tv', showDetail.show_id, payload)
+                                if(!result.ok) {
+                                  alert(`Failed to update: ${result.error}`)
+                                  return
+                                }
+                              }
+                              
+                              // Reload detail data
+                              const mediaType = detailData.media_type
+                              const id = mediaType === 'movie' ? (detailData as MovieDetail).movie_id : (detailData as ShowDetail).show_id
+                              if(mediaType === 'movie') {
+                                const data = await getMovieDetail(id)
+                                setDetailData({ ...data, media_type: 'movie' })
+                                setEditTitle(data.title || '')
+                                setEditOverview(data.overview || '')
+                                setEditLanguage(data.original_language || '')
+                                setEditYear(data.release_year?.toString() || '')
+                                setEditTmdbScore(data.vote_average?.toString() || '')
+                                setEditPopularity(data.popularity?.toString() || '')
+                                // Join all genres with comma and space
+                                setEditGenre(data.genres?.join(', ') || '')
+                              } else {
+                                const data = await getShowDetail(id)
+                                setDetailData({ ...data, media_type: 'tv' })
+                                setEditTitle(data.title || '')
+                                setEditOverview(data.overview || '')
+                                setEditLanguage(data.original_language || '')
+                                const yearMatch = data.first_air_date?.match(/^(\d{4})/)
+                                setEditYear(yearMatch ? yearMatch[1] : '')
+                                setEditTmdbScore(data.vote_average?.toString() || '')
+                                setEditPopularity(data.popularity?.toString() || '')
+                                // Join all genres with comma and space
+                                setEditGenre(data.genres?.join(', ') || '')
+                              }
+                              setDetailEditMode(false)
+                            } catch (err: any) {
+                              alert(`Error updating: ${err?.message || 'Unknown error'}`)
+                            } finally {
+                              setEditSaving(false)
+                            }
+                          } else {
+                            // Enter edit mode - initialize fields from current data
+                            setEditTitle(detailData.title || '')
+                            setEditOverview(detailData.overview || '')
+                            setEditLanguage(detailData.original_language || '')
+                            if(detailData.media_type === 'movie') {
+                              const movieDetail = detailData as MovieDetail
+                              setEditYear(movieDetail.release_year?.toString() || '')
+                            } else {
+                              const showDetail = detailData as ShowDetail
+                              const yearMatch = showDetail.first_air_date?.match(/^(\d{4})/)
+                              setEditYear(yearMatch ? yearMatch[1] : '')
+                            }
+                            setEditTmdbScore(detailData.vote_average?.toString() || '')
+                            setEditPopularity(detailData.popularity?.toString() || '')
+                            // Join all genres with comma and space
+                            setEditGenre(detailData.genres?.join(', ') || '')
+                            setDetailEditMode(true)
+                          }
+                        }}
+                        disabled={editSaving || detailLoading}
+                      >
+                        {detailEditMode ? (editSaving ? 'Saving...' : 'Save') : 'Edit'}
+                      </button>
+                    </div>
                   </div>
 
                   {/* Meta Info Row */}
-                  <div className="detail-meta-row">
-                    {detailData.media_type === 'movie' && (detailData as MovieDetail).release_year && (
-                      <div className="meta-item">
-                        <span className="meta-icon">📅</span>
-                        <span>{(detailData as MovieDetail).release_year}</span>
+                  {detailEditMode ? (
+                    <div className="detail-edit-form">
+                      <div className="detail-edit-row">
+                        <label>Year:</label>
+                        <input
+                          type="number"
+                          value={editYear}
+                          onChange={(e) => setEditYear(e.target.value)}
+                          className="detail-edit-input"
+                          placeholder="Year"
+                        />
                       </div>
-                    )}
-                    {detailData.media_type === 'tv' && (detailData as ShowDetail).first_air_date && (
-                      <div className="meta-item">
-                        <span className="meta-icon">📅</span>
-                        <span>{(detailData as ShowDetail).first_air_date?.substring(0, 4) ?? 'Unknown'}</span>
+                      <div className="detail-edit-row">
+                        <label>Language:</label>
+                        <input
+                          type="text"
+                          value={editLanguage}
+                          onChange={(e) => setEditLanguage(e.target.value)}
+                          className="detail-edit-input"
+                          placeholder="Language code (e.g., en)"
+                        />
                       </div>
-                    )}
-                    {detailData.media_type === 'movie' && (detailData as MovieDetail).runtime_minutes && (
-                      <div className="meta-item">
-                        <span className="meta-icon">⏱️</span>
-                        <span>{(detailData as MovieDetail).runtime_minutes} min</span>
+                      <div className="detail-edit-row">
+                        <label>Genre:</label>
+                        <input
+                          type="text"
+                          value={editGenre}
+                          onChange={(e) => setEditGenre(e.target.value)}
+                          className="detail-edit-input"
+                          placeholder="Genre (comma-separated, e.g., Action, Crime)"
+                        />
                       </div>
-                    )}
-                    {detailData.media_type === 'tv' && (detailData as ShowDetail).season_count !== undefined && (
-                      <div className="meta-item">
-                        <span className="meta-icon">📺</span>
-                        <span>{(detailData as ShowDetail).season_count} season{(detailData as ShowDetail).season_count !== 1 ? 's' : ''}</span>
+                      <div className="detail-edit-row">
+                        <label>TMDb Score:</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={editTmdbScore}
+                          onChange={(e) => setEditTmdbScore(e.target.value)}
+                          className="detail-edit-input"
+                          placeholder="Score (0-10)"
+                        />
                       </div>
-                    )}
-                  </div>
+                      <div className="detail-edit-row">
+                        <label>Popularity:</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={editPopularity}
+                          onChange={(e) => setEditPopularity(e.target.value)}
+                          className="detail-edit-input"
+                          placeholder="Popularity"
+                        />
+                      </div>
+                      <div className="detail-edit-row detail-edit-row-full">
+                        <label>Synopsis:</label>
+                        <textarea
+                          value={editOverview}
+                          onChange={(e) => setEditOverview(e.target.value)}
+                          className="detail-edit-textarea"
+                          placeholder="Synopsis"
+                          rows={5}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="detail-meta-row">
+                        {detailData.media_type === 'movie' && (detailData as MovieDetail).release_year && (
+                          <div className="meta-item">
+                            <span className="meta-icon">📅</span>
+                            <span>{(detailData as MovieDetail).release_year}</span>
+                          </div>
+                        )}
+                        {detailData.media_type === 'tv' && (detailData as ShowDetail).first_air_date && (
+                          <div className="meta-item">
+                            <span className="meta-icon">📅</span>
+                            <span>{(detailData as ShowDetail).first_air_date?.substring(0, 4) ?? 'Unknown'}</span>
+                          </div>
+                        )}
+                        {detailData.media_type === 'movie' && (detailData as MovieDetail).runtime_minutes != null && (detailData as MovieDetail).runtime_minutes! > 0 && (
+                          <div className="meta-item">
+                            <span className="meta-icon">⏱️</span>
+                            <span>{(detailData as MovieDetail).runtime_minutes} min</span>
+                          </div>
+                        )}
+                        {detailData.media_type === 'tv' && (detailData as ShowDetail).season_count !== undefined && (
+                          <div className="meta-item">
+                            <span className="meta-icon">📺</span>
+                            <span>{(detailData as ShowDetail).season_count} season{(detailData as ShowDetail).season_count !== 1 ? 's' : ''}</span>
+                          </div>
+                        )}
+                      </div>
 
-                  {/* Genres */}
-                  <div className="detail-genre-list">
-                    <span className="detail-genre-tag detail-language-tag" title={`Original language: ${languageTitle}`}>
-                      <span className="language-icon" aria-hidden="true">🌐</span>
-                      <span>{languageTitle}</span>
-                    </span>
-                    {detailData.genres.map(g => (
-                      <span key={g} className="detail-genre-tag">{g}</span>
-                    ))}
-                  </div>
+                      {/* Genres */}
+                      <div className="detail-genre-list">
+                        <span className="detail-genre-tag detail-language-tag" title={`Original language: ${languageTitle}`}>
+                          <span className="language-icon" aria-hidden="true">🌐</span>
+                          <span>{languageTitle}</span>
+                        </span>
+                        {detailData.genres.map(g => (
+                          <span key={g} className="detail-genre-tag">{g}</span>
+                        ))}
+                      </div>
 
-                  {/* Overview */}
-                  <div className="detail-overview-section">
-                    <h3 className="section-title">Synopsis</h3>
-                    {detailData.overview ? (
-                      <p className="detail-synopsis">{detailData.overview}</p>
-                    ) : (
-                      <p className="detail-synopsis no-data">No synopsis available.</p>
-                    )}
-                  </div>
+                      {/* Overview */}
+                      <div className="detail-overview-section">
+                        <h3 className="section-title">Synopsis</h3>
+                        {detailData.overview ? (
+                          <p className="detail-synopsis">{detailData.overview}</p>
+                        ) : (
+                          <p className="detail-synopsis no-data">No synopsis available.</p>
+                        )}
+                      </div>
+                    </>
+                  )}
 
                   {/* Stats Grid */}
                   <div className="detail-stats-section">
@@ -1764,7 +2370,7 @@ export default function App() {
                       )}
                       <div className="stat-card">
                         <div className="stat-icon">💬</div>
-                        <div className="stat-value">{detailData.review_count}</div>
+                        <div className="stat-value">{reviews.length}</div>
                         <div className="stat-label">Reviews</div>
                       </div>
                       {detailData.popularity && (
@@ -1789,6 +2395,137 @@ export default function App() {
                         </div>
                       )}
                     </div>
+                  </div>
+
+                  {/* Reviews Section */}
+                  <div className="detail-reviews-section">
+                    <h3 className="section-title">Reviews</h3>
+                    <div className="review-count-display">
+                      There are {reviews.length} review{reviews.length !== 1 ? 's' : ''}
+                    </div>
+                    
+                    {/* Display Reviews */}
+                    {reviewsLoading ? (
+                      <div className="reviews-loading">Loading reviews...</div>
+                    ) : reviews.length > 0 ? (
+                      <div className="reviews-list">
+                        {reviews.map((review) => (
+                          <div key={review.review_id} className="review-item">
+                            <div className="review-content">{review.content}</div>
+                            <div className="review-meta">
+                              {review.user_email && (
+                                <span className="review-author">{review.user_email.split('@')[0]}</span>
+                              )}
+                              {review.created_at && (
+                                <span className="review-date">
+                                  {new Date(review.created_at).toLocaleDateString()}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="reviews-empty">No reviews yet. Be the first to review!</div>
+                    )}
+                    
+                    {/* Review Input */}
+                    {currentUser && (
+                      <div className="review-input-section">
+                        <textarea
+                          value={reviewText}
+                          onChange={(e) => setReviewText(e.target.value)}
+                          className="review-input-textarea"
+                          placeholder="Enter Your Review Here"
+                          rows={3}
+                        />
+                        <button
+                          type="button"
+                          className="review-submit-button"
+                          onClick={async () => {
+                            if(!reviewText.trim()) {
+                              alert('Please enter a review before submitting.')
+                              return
+                            }
+                            if(!currentUser) {
+                              alert('Please log in to submit a review.')
+                              return
+                            }
+                            if(!detailData) return
+                            
+                            setReviewSubmitting(true)
+                            try {
+                              // Get user_id if not already available
+                              let userId = currentUser.user_id
+                              if(!userId && currentUser.email) {
+                                // Fetch user_id from backend by email
+                                try {
+                                  const userData = await getUserByEmail(currentUser.email)
+                                  console.log('[Review] getUserByEmail result:', userData)
+                                  if(userData.ok && userData.user_id) {
+                                    userId = userData.user_id
+                                    // Update currentUser with user_id
+                                    const updatedUser = { ...currentUser, user_id: userId }
+                                    setCurrentUser(updatedUser)
+                                    try {
+                                      sessionStorage.setItem('currentUser', JSON.stringify(updatedUser))
+                                      if(localStorage.getItem('rememberUser') === '1') {
+                                        localStorage.setItem('currentUser', JSON.stringify(updatedUser))
+                                      }
+                                    } catch {}
+                                  } else {
+                                    console.error('[Review] Failed to get user_id:', userData.error)
+                                    alert(`Unable to identify user: ${userData.error || 'Unknown error'}. Please log out and log back in.`)
+                                    setReviewSubmitting(false)
+                                    return
+                                  }
+                                } catch (err: any) {
+                                  console.error('[Review] Error fetching user_id:', err)
+                                  alert(`Error identifying user: ${err?.message || 'Unknown error'}. Please log out and log back in.`)
+                                  setReviewSubmitting(false)
+                                  return
+                                }
+                              }
+                              
+                              if(!userId) {
+                                alert('Unable to identify user. Please log out and log back in to refresh your session.')
+                                setReviewSubmitting(false)
+                                return
+                              }
+                              
+                              const mediaType = detailData.media_type
+                              const targetType = mediaType === 'movie' ? 'movie' : 'show' // Backend expects 'show' not 'tv'
+                              const id = mediaType === 'movie' 
+                                ? (detailData as MovieDetail).movie_id 
+                                : (detailData as ShowDetail).show_id
+                              
+                              const result = await createReview(
+                                userId,
+                                targetType,
+                                id,
+                                reviewText.trim()
+                              )
+                              
+                              if(result.ok) {
+                                setReviewText('')
+                                // Reload reviews
+                                const reviewsData = await getReviews(targetType, id)
+                                setReviews(reviewsData.reviews || [])
+                              } else {
+                                alert(`Failed to submit review: ${result.error}`)
+                              }
+                            } catch (err: any) {
+                              alert(`Error submitting review: ${err?.message || 'Unknown error'}`)
+                            } finally {
+                              setReviewSubmitting(false)
+                            }
+                          }}
+                          disabled={reviewSubmitting || !reviewText.trim() || !currentUser}
+                        >
+                          {reviewSubmitting ? 'Submitting...' : 'Submit'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -2329,6 +3066,123 @@ export default function App() {
             <div className="filter-pagination">
               <button
                 type="button"
+                className={`filter-action-button${moviesSelectionMode ? ' active' : ''}`}
+                onClick={() => {
+                  setMoviesSelectionMode(!moviesSelectionMode)
+                  if(moviesSelectionMode){
+                    setMoviesSelected(new Set())
+                  }
+                }}
+              >
+                Select{moviesSelectionMode && moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
+              </button>
+              <button
+                type="button"
+                className="filter-delete-button"
+                onClick={async () => {
+                  if(moviesSelected.size === 0 || moviesDeleting) return
+                  if(!confirm(`Are you sure you want to delete ${moviesSelected.size} item(s)? This action cannot be undone.`)) return
+                  
+                  // Prevent multiple simultaneous deletions
+                  setMoviesDeleting(true)
+                  setMoviesLoading(true)
+                  
+                  try {
+                    // Get unique IDs (Set already ensures uniqueness, but be explicit)
+                    const selectedIds = Array.from(moviesSelected)
+                    const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
+                    
+                    if(validIds.length === 0) {
+                      alert('No valid items selected for deletion.')
+                      return
+                    }
+                    
+                    // Remove duplicates (shouldn't happen with Set, but be safe)
+                    const uniqueIds = [...new Set(validIds)]
+                    
+                    console.log(`[Delete] Deleting ${uniqueIds.length} movie(s) with IDs:`, uniqueIds)
+                    
+                    const deletePromises = uniqueIds.map(id => 
+                      deleteMedia('movie', id)
+                    )
+                    const results = await Promise.all(deletePromises)
+                    const failed = results.filter(r => !r.ok)
+                    
+                    if(failed.length > 0){
+                      const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
+                      alert(`Failed to delete ${failed.length} item(s):\n${errorMessages}`)
+                    } else {
+                      console.log(`[Delete] Successfully deleted ${uniqueIds.length} movie(s)`)
+                      setMoviesSelected(new Set())
+                      setMoviesSelectionMode(false)
+                      await loadMovies(moviesPage)
+                    }
+                  } catch (err: any) {
+                    console.error('[Delete] Error during deletion:', err)
+                    alert(`Error deleting items: ${err?.message || 'Unknown error'}`)
+                  } finally {
+                    setMoviesLoading(false)
+                    setMoviesDeleting(false)
+                  }
+                }}
+                disabled={moviesLoading || moviesDeleting || moviesSelected.size === 0 || !moviesSelectionMode}
+              >
+                Delete{moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
+              </button>
+              <button
+                type="button"
+                className="filter-copy-button"
+                onClick={async () => {
+                  if(moviesSelected.size === 0 || moviesCopying) return
+                  if(!confirm(`Are you sure you want to copy ${moviesSelected.size} item(s)?`)) return
+                  
+                  // Prevent multiple simultaneous copy operations
+                  setMoviesCopying(true)
+                  setMoviesLoading(true)
+                  
+                  try {
+                    // Get unique IDs
+                    const selectedIds = Array.from(moviesSelected)
+                    const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
+                    
+                    if(validIds.length === 0) {
+                      alert('No valid items selected for copying.')
+                      return
+                    }
+                    
+                    const uniqueIds = [...new Set(validIds)]
+                    
+                    console.log(`[Copy] Copying ${uniqueIds.length} movie(s) with IDs:`, uniqueIds)
+                    
+                    const copyPromises = uniqueIds.map(id => 
+                      copyMedia('movie', id)
+                    )
+                    const results = await Promise.all(copyPromises)
+                    const failed = results.filter(r => !r.ok)
+                    
+                    if(failed.length > 0){
+                      const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
+                      alert(`Failed to copy ${failed.length} item(s):\n${errorMessages}`)
+                    } else {
+                      console.log(`[Copy] Successfully copied ${uniqueIds.length} movie(s)`)
+                      setMoviesSelected(new Set())
+                      setMoviesSelectionMode(false)
+                      await loadMovies(moviesPage)
+                    }
+                  } catch (err: any) {
+                    console.error('[Copy] Error during copying:', err)
+                    alert(`Error copying items: ${err?.message || 'Unknown error'}`)
+                  } finally {
+                    setMoviesLoading(false)
+                    setMoviesCopying(false)
+                  }
+                }}
+                disabled={moviesLoading || moviesCopying || moviesSelected.size === 0 || !moviesSelectionMode}
+              >
+                Copy{moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
+              </button>
+              <button
+                type="button"
                 className="filter-pagination-button"
                 onClick={goToPreviousMovies}
                 disabled={moviesLoading || !canNavigateMoviesPrev}
@@ -2357,8 +3211,20 @@ export default function App() {
                   <Card 
                     key={`m-${m.tmdb_id}`} 
                     item={m} 
-                    onClick={() => navigateToDetail('movie', m.id!)}
+                    onClick={() => !moviesSelectionMode && navigateToDetail('movie', m.id!)}
                     style={{ animationDelay: `${idx * 60}ms` }}
+                    selectionMode={moviesSelectionMode}
+                    selected={m.id !== undefined && moviesSelected.has(m.id)}
+                    onSelectChange={(selected) => {
+                      if(m.id === undefined) return
+                      const newSelected = new Set(moviesSelected)
+                      if(selected){
+                        newSelected.add(m.id)
+                      } else {
+                        newSelected.delete(m.id)
+                      }
+                      setMoviesSelected(newSelected)
+                    }}
                   />
                 ))}
               </div>
@@ -2438,6 +3304,123 @@ export default function App() {
             <div className="filter-pagination">
               <button
                 type="button"
+                className={`filter-action-button${tvSelectionMode ? ' active' : ''}`}
+                onClick={() => {
+                  setTvSelectionMode(!tvSelectionMode)
+                  if(tvSelectionMode){
+                    setTvSelected(new Set())
+                  }
+                }}
+              >
+                Select{tvSelectionMode && tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
+              </button>
+              <button
+                type="button"
+                className="filter-delete-button"
+                onClick={async () => {
+                  if(tvSelected.size === 0 || tvDeleting) return
+                  if(!confirm(`Are you sure you want to delete ${tvSelected.size} item(s)? This action cannot be undone.`)) return
+                  
+                  // Prevent multiple simultaneous deletions
+                  setTvDeleting(true)
+                  setTvLoading(true)
+                  
+                  try {
+                    // Get unique IDs (Set already ensures uniqueness, but be explicit)
+                    const selectedIds = Array.from(tvSelected)
+                    const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
+                    
+                    if(validIds.length === 0) {
+                      alert('No valid items selected for deletion.')
+                      return
+                    }
+                    
+                    // Remove duplicates (shouldn't happen with Set, but be safe)
+                    const uniqueIds = [...new Set(validIds)]
+                    
+                    console.log(`[Delete] Deleting ${uniqueIds.length} TV show(s) with IDs:`, uniqueIds)
+                    
+                    const deletePromises = uniqueIds.map(id => 
+                      deleteMedia('tv', id)
+                    )
+                    const results = await Promise.all(deletePromises)
+                    const failed = results.filter(r => !r.ok)
+                    
+                    if(failed.length > 0){
+                      const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
+                      alert(`Failed to delete ${failed.length} item(s):\n${errorMessages}`)
+                    } else {
+                      console.log(`[Delete] Successfully deleted ${uniqueIds.length} TV show(s)`)
+                      setTvSelected(new Set())
+                      setTvSelectionMode(false)
+                      await loadTv(tvPage)
+                    }
+                  } catch (err: any) {
+                    console.error('[Delete] Error during deletion:', err)
+                    alert(`Error deleting items: ${err?.message || 'Unknown error'}`)
+                  } finally {
+                    setTvLoading(false)
+                    setTvDeleting(false)
+                  }
+                }}
+                disabled={tvLoading || tvDeleting || tvSelected.size === 0 || !tvSelectionMode}
+              >
+                Delete{tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
+              </button>
+              <button
+                type="button"
+                className="filter-copy-button"
+                onClick={async () => {
+                  if(tvSelected.size === 0 || tvCopying) return
+                  if(!confirm(`Are you sure you want to copy ${tvSelected.size} item(s)?`)) return
+                  
+                  // Prevent multiple simultaneous copy operations
+                  setTvCopying(true)
+                  setTvLoading(true)
+                  
+                  try {
+                    // Get unique IDs
+                    const selectedIds = Array.from(tvSelected)
+                    const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
+                    
+                    if(validIds.length === 0) {
+                      alert('No valid items selected for copying.')
+                      return
+                    }
+                    
+                    const uniqueIds = [...new Set(validIds)]
+                    
+                    console.log(`[Copy] Copying ${uniqueIds.length} TV show(s) with IDs:`, uniqueIds)
+                    
+                    const copyPromises = uniqueIds.map(id => 
+                      copyMedia('tv', id)
+                    )
+                    const results = await Promise.all(copyPromises)
+                    const failed = results.filter(r => !r.ok)
+                    
+                    if(failed.length > 0){
+                      const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
+                      alert(`Failed to copy ${failed.length} item(s):\n${errorMessages}`)
+                    } else {
+                      console.log(`[Copy] Successfully copied ${uniqueIds.length} TV show(s)`)
+                      setTvSelected(new Set())
+                      setTvSelectionMode(false)
+                      await loadTv(tvPage)
+                    }
+                  } catch (err: any) {
+                    console.error('[Copy] Error during copying:', err)
+                    alert(`Error copying items: ${err?.message || 'Unknown error'}`)
+                  } finally {
+                    setTvLoading(false)
+                    setTvCopying(false)
+                  }
+                }}
+                disabled={tvLoading || tvCopying || tvSelected.size === 0 || !tvSelectionMode}
+              >
+                Copy{tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
+              </button>
+              <button
+                type="button"
                 className="filter-pagination-button"
                 onClick={goToPreviousTv}
                 disabled={tvLoading || !canNavigateTvPrev}
@@ -2466,8 +3449,20 @@ export default function App() {
                   <Card 
                     key={`t-${m.tmdb_id}`} 
                     item={m} 
-                    onClick={() => navigateToDetail('tv', m.id!)}
+                    onClick={() => !tvSelectionMode && navigateToDetail('tv', m.id!)}
                     style={{ animationDelay: `${idx * 60}ms` }}
+                    selectionMode={tvSelectionMode}
+                    selected={m.id !== undefined && tvSelected.has(m.id)}
+                    onSelectChange={(selected) => {
+                      if(m.id === undefined) return
+                      const newSelected = new Set(tvSelected)
+                      if(selected){
+                        newSelected.add(m.id)
+                      } else {
+                        newSelected.delete(m.id)
+                      }
+                      setTvSelected(newSelected)
+                    }}
                   />
                 ))}
               </div>

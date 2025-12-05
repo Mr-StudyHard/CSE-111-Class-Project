@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 from .db import close_db, execute, get_db, query
 
@@ -147,6 +151,45 @@ def _summary_payload() -> dict[str, Any]:
     }
 
 
+def _next_manual_tmdb_id(table: str) -> int:
+    """
+    Generate a synthetic TMDb ID for manually added records.
+
+    Real TMDb IDs are positive integers. To avoid collisions we allocate
+    strictly negative IDs and walk "downwards" from the most-negative one
+    currently stored in the table.
+    """
+    conn = get_db()
+    col = "tmdb_id"
+    row = conn.execute(f"SELECT MIN({col}) AS min_id FROM {table}").fetchone()
+    current_min = row["min_id"] if row and row["min_id"] is not None else 0
+    if current_min is None or current_min >= 0:
+        return -1
+    return int(current_min) - 1
+
+
+def _get_or_create_genre_id(name: str) -> int:
+    """
+    Look up a genre by case-insensitive name, inserting it if needed.
+    """
+    clean = name.strip()
+    if not clean:
+        raise ValueError("genre name must be non-empty")
+    conn = get_db()
+    row = conn.execute(
+        "SELECT genre_id FROM genres WHERE lower(name) = lower(?)",
+        (clean,),
+    ).fetchone()
+    if row:
+        return int(row["genre_id"])
+    cur = conn.execute(
+        "INSERT INTO genres (tmdb_genre_id, name) VALUES (NULL, ?)",
+        (clean,),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
 def _ensure_auth_bootstrap() -> None:
     """
     Make sure the users table has password columns and seed demo credentials.
@@ -257,11 +300,39 @@ def list_users():
             {
                 "user": username,
                 "email": email,
+                "user_id": row_dict.get("user_id"),
                 "password": password_value,
                 "created_at": row_dict.get("created_at"),
             }
         )
     return jsonify(results)
+
+
+@app.get("/api/user/by-email")
+def get_user_by_email():
+    """
+    Get user information by email address.
+    Query parameter: email
+    """
+    email = request.args.get("email")
+    if not email:
+        return jsonify({"ok": False, "error": "email parameter is required"}), 400
+    
+    rows = query(
+        """
+        SELECT user_id, email
+        FROM users
+        WHERE lower(email) = lower(?)
+        LIMIT 1
+        """,
+        (email,),
+    )
+    
+    if not rows:
+        return jsonify({"ok": False, "error": "User not found"}), 404
+    
+    row = dict(rows[0])
+    return jsonify({"ok": True, "user_id": row["user_id"], "email": row["email"]})
 
 
 @app.post("/api/signup")
@@ -316,7 +387,7 @@ def login_route():
 
     rows = query(
         """
-        SELECT email, password_hash, password_plain
+        SELECT user_id, email, password_hash, password_plain
         FROM users
         WHERE lower(email) = lower(?)
         LIMIT 1
@@ -343,7 +414,7 @@ def login_route():
         return jsonify({"ok": False, "error": "Invalid credentials"}), 401
 
     display_name = email.split("@", 1)[0] if "@" in email else email
-    return jsonify({"ok": True, "user": display_name, "email": record["email"]})
+    return jsonify({"ok": True, "user": display_name, "email": record["email"], "user_id": record["user_id"]})
 
 
 def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | None = None, language: str | None = None) -> dict[str, Any]:
@@ -478,6 +549,91 @@ def movies_list():
     return jsonify(payload)
 
 
+@app.post("/api/movies")
+def create_movie():
+    """
+    Create a new movie record plus at least one genre association.
+
+    This is used by the admin "Add Movie/TV" UI and expects JSON in the form:
+      {
+        "title": "Example",
+        "overview": "...",           # optional
+        "language": "en",           # optional ISO code
+        "release_year": 2024,       # optional int
+        "tmdb_score": 7.3,          # optional float -> tmdb_vote_avg
+        "popularity": 10.0,         # optional float
+        "poster_path": "/path.jpg", # optional string (relative or URL)
+        "genre": "Drama"            # required, creates if missing
+      }
+    """
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get("title") or "").strip()
+    if not title:
+        return jsonify({"ok": False, "error": "Title is required"}), 400
+
+    overview = (payload.get("overview") or "").strip() or None
+    language = (payload.get("language") or "").strip() or None
+    poster_path = (payload.get("poster_path") or "").strip() or None
+    try:
+        release_year_raw = payload.get("release_year")
+        release_year = int(release_year_raw) if release_year_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "release_year must be a whole number"}), 400
+
+    def _coerce_float(key: str) -> float | None:
+        value = payload.get(key)
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be numeric")
+
+    try:
+        tmdb_score = _coerce_float("tmdb_score")
+        popularity = _coerce_float("popularity")
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    genre_name = (payload.get("genre") or "").strip()
+    if not genre_name:
+        return jsonify({"ok": False, "error": "Genre is required"}), 400
+
+    conn = get_db()
+    try:
+        tmdb_id = _next_manual_tmdb_id("movies")
+        cur = conn.execute(
+            """
+            INSERT INTO movies (
+                tmdb_id, title, release_year, runtime_min,
+                overview, poster_path, backdrop_path,
+                original_language, tmdb_vote_avg, popularity
+            )
+            VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?)
+            """,
+            (tmdb_id, title, release_year, overview, poster_path, language, tmdb_score, popularity),
+        )
+        movie_id = int(cur.lastrowid)
+        genre_id = _get_or_create_genre_id(genre_name)
+        conn.execute(
+            "INSERT OR IGNORE INTO movie_genres (movie_id, genre_id) VALUES (?, ?)",
+            (movie_id, genre_id),
+        )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    return jsonify(
+        {
+            "ok": True,
+            "id": movie_id,
+            "tmdb_id": tmdb_id,
+            "title": title,
+        }
+    ), 201
+
+
 @app.get("/api/tv")
 def shows_list():
     limit = _get_int(request.args.get("limit"), DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE)
@@ -487,6 +643,94 @@ def shows_list():
     language = request.args.get("language")
     payload = _list_media("show", sort, page, limit, genre, language)
     return jsonify(payload)
+
+
+@app.post("/api/tv")
+def create_show():
+    """
+    Create a new TV show record plus at least one genre association.
+
+    Expected JSON is analogous to create_movie, but the date field is:
+      {
+        "title": "Example Series",
+        "overview": "...",
+        "language": "en",
+        "first_air_year": 2024,     # optional
+        "tmdb_score": 7.3,
+        "popularity": 10.0,
+        "poster_path": "/path.jpg",
+        "genre": "Drama"
+      }
+    """
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get("title") or "").strip()
+    if not title:
+        return jsonify({"ok": False, "error": "Title is required"}), 400
+
+    overview = (payload.get("overview") or "").strip() or None
+    language = (payload.get("language") or "").strip() or None
+    poster_path = (payload.get("poster_path") or "").strip() or None
+
+    try:
+        first_air_raw = payload.get("first_air_year")
+        first_air_year = int(first_air_raw) if first_air_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "first_air_year must be a whole number"}), 400
+
+    def _coerce_float(key: str) -> float | None:
+        value = payload.get(key)
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} must be numeric")
+
+    try:
+        tmdb_score = _coerce_float("tmdb_score")
+        popularity = _coerce_float("popularity")
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    genre_name = (payload.get("genre") or "").strip()
+    if not genre_name:
+        return jsonify({"ok": False, "error": "Genre is required"}), 400
+
+    conn = get_db()
+    try:
+        tmdb_id = _next_manual_tmdb_id("shows")
+        # Store first_air_year as a YYYY-01-01 date string if provided.
+        first_air_date = f"{first_air_year}-01-01" if first_air_year is not None else None
+        cur = conn.execute(
+            """
+            INSERT INTO shows (
+                tmdb_id, title, first_air_date, last_air_date,
+                overview, poster_path, backdrop_path,
+                original_language, tmdb_vote_avg, popularity
+            )
+            VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?)
+            """,
+            (tmdb_id, title, first_air_date, overview, poster_path, language, tmdb_score, popularity),
+        )
+        show_id = int(cur.lastrowid)
+        genre_id = _get_or_create_genre_id(genre_name)
+        conn.execute(
+            "INSERT OR IGNORE INTO show_genres (show_id, genre_id) VALUES (?, ?)",
+            (show_id, genre_id),
+        )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    return jsonify(
+        {
+            "ok": True,
+            "id": show_id,
+            "tmdb_id": tmdb_id,
+            "title": title,
+        }
+    ), 201
 
 
 @app.get("/api/trending")
@@ -852,6 +1096,353 @@ def show_detail(show_id: int):
     return jsonify(show)
 
 
+@app.delete("/api/movies/<int:movie_id>")
+def delete_movie(movie_id: int):
+    """
+    Delete a movie and its associated data (genres, reviews, etc.).
+    Also deletes the associated image file if it exists.
+    """
+    conn = get_db()
+    try:
+        # First check if movie exists
+        check_row = conn.execute(
+            "SELECT movie_id, poster_path FROM movies WHERE movie_id = ?",
+            (movie_id,),
+        ).fetchone()
+        
+        if not check_row:
+            return jsonify({"ok": False, "error": f"Movie with ID {movie_id} not found"}), 404
+        
+        poster_path = check_row["poster_path"] if check_row else None
+        
+        # Delete the movie (cascade will handle related records)
+        # Note: Foreign keys are already enabled in get_db()
+        deleted = conn.execute(
+            "DELETE FROM movies WHERE movie_id = ?",
+            (movie_id,),
+        ).rowcount
+        
+        if deleted == 0:
+            return jsonify({"ok": False, "error": f"Failed to delete movie {movie_id}"}), 500
+        
+        conn.commit()
+        
+        # Delete associated image file if it's a local upload
+        if poster_path and poster_path.startswith("imageofmovie/"):
+            try:
+                image_filename = poster_path.replace("imageofmovie/", "")
+                image_path = IMAGE_UPLOAD_FOLDER / image_filename
+                if image_path.exists():
+                    image_path.unlink()
+            except Exception:
+                pass  # Don't fail if image deletion fails
+        
+        return jsonify({"ok": True, "deleted": deleted})
+    except Exception as exc:
+        conn.rollback()
+        error_msg = str(exc)
+        # Log full traceback for debugging
+        import traceback
+        print(f"Error deleting movie {movie_id}: {traceback.format_exc()}")
+        return jsonify({"ok": False, "error": error_msg}), 500
+
+
+@app.put("/api/movies/<int:movie_id>")
+def update_movie(movie_id: int):
+    """
+    Update an existing movie record.
+    
+    Expected JSON payload (all fields optional except title if provided):
+      {
+        "title": "Updated Title",
+        "overview": "...",
+        "language": "en",
+        "release_year": 2024,
+        "tmdb_score": 7.3,
+        "popularity": 10.0,
+        "poster_path": "/path.jpg",
+        "genre": "Drama"
+      }
+    """
+    conn = get_db()
+    try:
+        # Check if movie exists
+        check_row = conn.execute(
+            "SELECT movie_id FROM movies WHERE movie_id = ?",
+            (movie_id,),
+        ).fetchone()
+        
+        if not check_row:
+            return jsonify({"ok": False, "error": f"Movie with ID {movie_id} not found"}), 404
+        
+        payload = request.get_json(silent=True) or {}
+        
+        # Build update fields
+        updates = []
+        params = []
+        
+        if "title" in payload:
+            title = (payload.get("title") or "").strip()
+            if not title:
+                return jsonify({"ok": False, "error": "Title cannot be empty"}), 400
+            updates.append("title = ?")
+            params.append(title)
+        
+        if "overview" in payload:
+            overview = (payload.get("overview") or "").strip() or None
+            updates.append("overview = ?")
+            params.append(overview)
+        
+        if "language" in payload:
+            language = (payload.get("language") or "").strip() or None
+            updates.append("original_language = ?")
+            params.append(language)
+        
+        if "release_year" in payload:
+            try:
+                release_year_raw = payload.get("release_year")
+                release_year = int(release_year_raw) if release_year_raw not in (None, "") else None
+                updates.append("release_year = ?")
+                params.append(release_year)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "release_year must be a whole number"}), 400
+        
+        if "poster_path" in payload:
+            poster_path = (payload.get("poster_path") or "").strip() or None
+            updates.append("poster_path = ?")
+            params.append(poster_path)
+        
+        def _coerce_float(key: str) -> float | None:
+            value = payload.get(key)
+            if value in (None, ""):
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be numeric")
+        
+        if "tmdb_score" in payload:
+            try:
+                tmdb_score = _coerce_float("tmdb_score")
+                updates.append("tmdb_vote_avg = ?")
+                params.append(tmdb_score)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+        
+        if "popularity" in payload:
+            try:
+                popularity = _coerce_float("popularity")
+                updates.append("popularity = ?")
+                params.append(popularity)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+        
+        if not updates:
+            return jsonify({"ok": False, "error": "No fields to update"}), 400
+        
+        # Update the movie
+        params.append(movie_id)
+        update_sql = f"UPDATE movies SET {', '.join(updates)} WHERE movie_id = ?"
+        conn.execute(update_sql, tuple(params))
+        
+        # Update genres if provided (comma-separated)
+        if "genre" in payload:
+            genre_input = (payload.get("genre") or "").strip()
+            if genre_input:
+                # Split by comma and process each genre
+                genre_names = [g.strip() for g in genre_input.split(",") if g.strip()]
+                if genre_names:
+                    # Remove existing genres
+                    conn.execute("DELETE FROM movie_genres WHERE movie_id = ?", (movie_id,))
+                    # Add all new genres
+                    for genre_name in genre_names:
+                        genre_id = _get_or_create_genre_id(genre_name)
+                        conn.execute(
+                            "INSERT OR IGNORE INTO movie_genres (movie_id, genre_id) VALUES (?, ?)",
+                            (movie_id, genre_id),
+                        )
+        
+        conn.commit()
+        return jsonify({"ok": True, "id": movie_id})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.put("/api/tv/<int:show_id>")
+def update_show(show_id: int):
+    """
+    Update an existing TV show record.
+    
+    Expected JSON payload (all fields optional except title if provided):
+      {
+        "title": "Updated Title",
+        "overview": "...",
+        "language": "en",
+        "first_air_year": 2024,
+        "tmdb_score": 7.3,
+        "popularity": 10.0,
+        "poster_path": "/path.jpg",
+        "genre": "Drama"
+      }
+    """
+    conn = get_db()
+    try:
+        # Check if show exists
+        check_row = conn.execute(
+            "SELECT show_id FROM shows WHERE show_id = ?",
+            (show_id,),
+        ).fetchone()
+        
+        if not check_row:
+            return jsonify({"ok": False, "error": f"TV show with ID {show_id} not found"}), 404
+        
+        payload = request.get_json(silent=True) or {}
+        
+        # Build update fields
+        updates = []
+        params = []
+        
+        if "title" in payload:
+            title = (payload.get("title") or "").strip()
+            if not title:
+                return jsonify({"ok": False, "error": "Title cannot be empty"}), 400
+            updates.append("title = ?")
+            params.append(title)
+        
+        if "overview" in payload:
+            overview = (payload.get("overview") or "").strip() or None
+            updates.append("overview = ?")
+            params.append(overview)
+        
+        if "language" in payload:
+            language = (payload.get("language") or "").strip() or None
+            updates.append("original_language = ?")
+            params.append(language)
+        
+        if "first_air_year" in payload:
+            try:
+                first_air_raw = payload.get("first_air_year")
+                first_air_year = int(first_air_raw) if first_air_raw not in (None, "") else None
+                first_air_date = f"{first_air_year}-01-01" if first_air_year is not None else None
+                updates.append("first_air_date = ?")
+                params.append(first_air_date)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "first_air_year must be a whole number"}), 400
+        
+        if "poster_path" in payload:
+            poster_path = (payload.get("poster_path") or "").strip() or None
+            updates.append("poster_path = ?")
+            params.append(poster_path)
+        
+        def _coerce_float(key: str) -> float | None:
+            value = payload.get(key)
+            if value in (None, ""):
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be numeric")
+        
+        if "tmdb_score" in payload:
+            try:
+                tmdb_score = _coerce_float("tmdb_score")
+                updates.append("tmdb_vote_avg = ?")
+                params.append(tmdb_score)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+        
+        if "popularity" in payload:
+            try:
+                popularity = _coerce_float("popularity")
+                updates.append("popularity = ?")
+                params.append(popularity)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+        
+        if not updates:
+            return jsonify({"ok": False, "error": "No fields to update"}), 400
+        
+        # Update the show
+        params.append(show_id)
+        update_sql = f"UPDATE shows SET {', '.join(updates)} WHERE show_id = ?"
+        conn.execute(update_sql, tuple(params))
+        
+        # Update genres if provided (comma-separated)
+        if "genre" in payload:
+            genre_input = (payload.get("genre") or "").strip()
+            if genre_input:
+                # Split by comma and process each genre
+                genre_names = [g.strip() for g in genre_input.split(",") if g.strip()]
+                if genre_names:
+                    # Remove existing genres
+                    conn.execute("DELETE FROM show_genres WHERE show_id = ?", (show_id,))
+                    # Add all new genres
+                    for genre_name in genre_names:
+                        genre_id = _get_or_create_genre_id(genre_name)
+                        conn.execute(
+                            "INSERT OR IGNORE INTO show_genres (show_id, genre_id) VALUES (?, ?)",
+                            (show_id, genre_id),
+                        )
+        
+        conn.commit()
+        return jsonify({"ok": True, "id": show_id})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.delete("/api/tv/<int:show_id>")
+def delete_show(show_id: int):
+    """
+    Delete a TV show and its associated data (genres, reviews, seasons, episodes, etc.).
+    Also deletes the associated image file if it exists.
+    """
+    conn = get_db()
+    try:
+        # First check if show exists
+        check_row = conn.execute(
+            "SELECT show_id, poster_path FROM shows WHERE show_id = ?",
+            (show_id,),
+        ).fetchone()
+        
+        if not check_row:
+            return jsonify({"ok": False, "error": f"TV show with ID {show_id} not found"}), 404
+        
+        poster_path = check_row["poster_path"] if check_row else None
+        
+        # Delete the show (cascade will handle related records)
+        # Note: Foreign keys are already enabled in get_db()
+        deleted = conn.execute(
+            "DELETE FROM shows WHERE show_id = ?",
+            (show_id,),
+        ).rowcount
+        
+        if deleted == 0:
+            return jsonify({"ok": False, "error": f"Failed to delete TV show {show_id}"}), 500
+        
+        conn.commit()
+        
+        # Delete associated image file if it's a local upload
+        if poster_path and poster_path.startswith("imageofmovie/"):
+            try:
+                image_filename = poster_path.replace("imageofmovie/", "")
+                image_path = IMAGE_UPLOAD_FOLDER / image_filename
+                if image_path.exists():
+                    image_path.unlink()
+            except Exception:
+                pass  # Don't fail if image deletion fails
+        
+        return jsonify({"ok": True, "deleted": deleted})
+    except Exception as exc:
+        conn.rollback()
+        error_msg = str(exc)
+        # Log full traceback for debugging
+        import traceback
+        print(f"Error deleting movie {movie_id}: {traceback.format_exc()}")
+        return jsonify({"ok": False, "error": error_msg}), 500
+
+
 @app.get("/api/show/<int:show_id>/seasons")
 def show_seasons(show_id: int):
     rows = query(
@@ -903,6 +1494,63 @@ def show_seasons(show_id: int):
     return jsonify(ordered)
 
 
+@app.get("/api/reviews")
+def get_reviews():
+    """
+    Get reviews for a movie or TV show.
+    Query parameters:
+    - target_type: 'movie' or 'show'
+    - target_id: the movie_id or show_id
+    """
+    target_type = request.args.get("target_type")
+    target_id = request.args.get("target_id")
+    
+    if not target_type or not target_id:
+        return jsonify({"error": "target_type and target_id are required"}), 400
+    
+    if target_type not in {"movie", "show"}:
+        return jsonify({"error": "target_type must be 'movie' or 'show'"}), 400
+    
+    try:
+        target_id_int = int(target_id)
+    except (TypeError, ValueError):
+        return jsonify({"error": "target_id must be an integer"}), 400
+    
+    conn = get_db()
+    if target_type == "movie":
+        sql = """
+            SELECT r.review_id, r.user_id, r.content, r.rating, r.created_at,
+                   u.email AS user_email
+            FROM reviews r
+            LEFT JOIN users u ON u.user_id = r.user_id
+            WHERE r.movie_id = ?
+            ORDER BY r.created_at DESC
+        """
+    else:
+        sql = """
+            SELECT r.review_id, r.user_id, r.content, r.rating, r.created_at,
+                   u.email AS user_email
+            FROM reviews r
+            LEFT JOIN users u ON u.user_id = r.user_id
+            WHERE r.show_id = ?
+            ORDER BY r.created_at DESC
+        """
+    
+    rows = query(sql, (target_id_int,))
+    reviews = []
+    for row in rows:
+        reviews.append({
+            "review_id": row["review_id"],
+            "user_id": row["user_id"],
+            "user_email": row["user_email"],
+            "content": row["content"],
+            "rating": row["rating"],
+            "created_at": row["created_at"],
+        })
+    
+    return jsonify({"ok": True, "reviews": reviews, "count": len(reviews)})
+
+
 @app.post("/api/reviews")
 def create_review():
     payload = request.get_json(force=True, silent=True) or {}
@@ -916,12 +1564,19 @@ def create_review():
         return jsonify({"error": "user_id and target_id must be integers"}), 400
     if target_type not in {"movie", "show"}:
         return jsonify({"error": "target_type must be 'movie' or 'show'"}), 400
-    try:
-        rating_value = float(rating)
-    except (TypeError, ValueError):
-        return jsonify({"error": "rating must be numeric"}), 400
-    if not (0 <= rating_value <= 10):
-        return jsonify({"error": "rating must be between 0 and 10"}), 400
+    
+    # Rating is optional - default to None if not provided
+    rating_value = None
+    if rating is not None:
+        try:
+            rating_value = float(rating)
+            if not (0 <= rating_value <= 10):
+                return jsonify({"error": "rating must be between 0 and 10"}), 400
+        except (TypeError, ValueError):
+            return jsonify({"error": "rating must be numeric"}), 400
+    
+    if not content:
+        return jsonify({"error": "Review content is required"}), 400
 
     conn = get_db()
     if target_type == "movie":
@@ -929,13 +1584,13 @@ def create_review():
             INSERT INTO reviews (user_id, movie_id, rating, content)
             VALUES (?, ?, ?, ?)
         """
-        params = (user_id, target_id, rating_value, content or None)
+        params = (user_id, target_id, rating_value, content)
     else:
         sql = """
             INSERT INTO reviews (user_id, show_id, rating, content)
             VALUES (?, ?, ?, ?)
         """
-        params = (user_id, target_id, rating_value, content or None)
+        params = (user_id, target_id, rating_value, content)
 
     try:
         cur = conn.execute(sql, params)
@@ -1089,7 +1744,9 @@ def get_show_detail(show_id: int):
         return jsonify({"error": "TV show not found"}), 404
     
     row = dict(rows[0])
-    genres = [g.strip() for g in (row.get("genres") or "").split(",") if g.strip()]
+    # Split genres by comma - GROUP_CONCAT returns comma-separated string
+    genres_str = row.get("genres") or ""
+    genres = [g.strip() for g in genres_str.split(",") if g.strip()] if genres_str else []
     
     result = {
         "show_id": row["show_id"],
@@ -1112,6 +1769,76 @@ def get_show_detail(show_id: int):
     }
     
     return jsonify(result)
+
+
+# Image upload configuration
+IMAGE_UPLOAD_FOLDER = Path(__file__).parent.parent / "imageofmovie"
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
+
+# Ensure upload folder exists
+IMAGE_UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+
+
+def _allowed_file(filename: str) -> bool:
+    """Check if file extension is allowed."""
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@app.post("/api/upload-image")
+def upload_image():
+    """
+    Upload an image file and save it to the imageofmovie folder.
+    Returns the relative path that can be stored in the database.
+    """
+    if "file" not in request.files:
+        return jsonify({"ok": False, "error": "No file provided"}), 400
+    
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"ok": False, "error": "No file selected"}), 400
+    
+    if not _allowed_file(file.filename):
+        return jsonify({"ok": False, "error": f"File type not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"}), 400
+    
+    try:
+        # Generate a unique filename to avoid collisions
+        original_ext = file.filename.rsplit(".", 1)[1].lower()
+        unique_filename = f"{uuid4().hex}.{original_ext}"
+        filepath = IMAGE_UPLOAD_FOLDER / unique_filename
+        
+        # Save the file
+        file.save(str(filepath))
+        
+        # Return relative path from project root (e.g., "imageofmovie/abc123.jpg")
+        relative_path = f"imageofmovie/{unique_filename}"
+        return jsonify({"ok": True, "path": relative_path})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to save image: {str(exc)}"}), 500
+
+
+@app.get("/api/images/<path:filename>")
+def serve_image(filename: str):
+    """
+    Serve uploaded images from the imageofmovie folder.
+    """
+    try:
+        # Security: ensure filename doesn't contain path traversal
+        # Remove any "imageofmovie/" prefix if present
+        clean_filename = filename.replace("imageofmovie/", "").replace("imageofmovie\\", "")
+        safe_filename = secure_filename(os.path.basename(clean_filename))
+        
+        if not safe_filename:
+            return jsonify({"error": "Invalid filename"}), 400
+        
+        # Check if file exists
+        filepath = IMAGE_UPLOAD_FOLDER / safe_filename
+        if not filepath.exists() or not filepath.is_file():
+            return jsonify({"error": f"Image not found: {safe_filename}"}), 404
+        
+        return send_from_directory(str(IMAGE_UPLOAD_FOLDER), safe_filename)
+    except Exception as exc:
+        import traceback
+        return jsonify({"error": f"Error serving image: {str(exc)}", "trace": traceback.format_exc()}), 500
 
 
 if __name__ == "__main__":
