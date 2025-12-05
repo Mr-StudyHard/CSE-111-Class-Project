@@ -1716,7 +1716,7 @@ export default function App() {
                         <span>{(detailData as ShowDetail).first_air_date?.substring(0, 4) ?? 'Unknown'}</span>
                       </div>
                     )}
-                    {detailData.media_type === 'movie' && (detailData as MovieDetail).runtime_minutes != null && (detailData as MovieDetail).runtime_minutes! > 0 && (
+                    {detailData.media_type === 'movie' && (detailData as MovieDetail).runtime_minutes && (
                       <div className="meta-item">
                         <span className="meta-icon">⏱️</span>
                         <span>{(detailData as MovieDetail).runtime_minutes} min</span>
