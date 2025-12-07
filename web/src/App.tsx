@@ -1941,6 +1941,19 @@ export default function App() {
                   PlotSignal
                 </button>
               </div>
+              {renderSearchField()}
+              <button
+                type="button"
+                className="search-toggle"
+                aria-label="Toggle search"
+                aria-expanded={mobileSearchOpen}
+                onClick={()=>setMobileSearchOpen(prev => !prev)}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <circle cx="11" cy="11" r="6" />
+                  <line x1="15.5" y1="15.5" x2="21" y2="21" />
+                </svg>
+              </button>
             </div>
             <div className="header-right">
               <div className="header-actions">
@@ -1979,6 +1992,19 @@ export default function App() {
                 PlotSignal
               </button>
             </div>
+            {renderSearchField()}
+            <button
+              type="button"
+              className="search-toggle"
+              aria-label="Toggle search"
+              aria-expanded={mobileSearchOpen}
+              onClick={()=>setMobileSearchOpen(prev => !prev)}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="11" cy="11" r="6" />
+                <line x1="15.5" y1="15.5" x2="21" y2="21" />
+              </svg>
+            </button>
           </div>
           <div className="header-right">
             <nav className="header-nav" aria-label="Primary navigation">
@@ -2753,6 +2779,19 @@ export default function App() {
                 PlotSignal
               </button>
             </div>
+            {renderSearchField()}
+            <button
+              type="button"
+              className="search-toggle"
+              aria-label="Toggle search"
+              aria-expanded={mobileSearchOpen}
+              onClick={()=>setMobileSearchOpen(prev => !prev)}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="11" cy="11" r="6" />
+                <line x1="15.5" y1="15.5" x2="21" y2="21" />
+              </svg>
+            </button>
           </div>
           <div className="header-right">
             <nav className="header-nav" aria-label="Primary navigation">
@@ -3303,8 +3342,34 @@ export default function App() {
                 PlotSignal
               </button>
             </div>
+            {renderSearchField()}
+            <button
+              type="button"
+              className="search-toggle"
+              aria-label="Toggle search"
+              aria-expanded={mobileSearchOpen}
+              onClick={()=>setMobileSearchOpen(prev => !prev)}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="11" cy="11" r="6" />
+                <line x1="15.5" y1="15.5" x2="21" y2="21" />
+              </svg>
+            </button>
           </div>
           <div className="header-right">
+            <nav className="header-nav" aria-label="Primary navigation">
+              {primaryNav.map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={()=>navigateToTab(item.id)}
+                  aria-current={tab === item.id ? 'page' : undefined}
+                  className={`nav-pill ${tab === item.id ? 'active' : ''}`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
             <div className="header-actions">
               {renderAccountControls()}
             </div>
