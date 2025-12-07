@@ -1848,7 +1848,7 @@ export default function App() {
           
           <div className="auth-landing-header">
             <div className="auth-landing-icon">🎬</div>
-            <h1 className="auth-landing-title">Movie &amp; TV Analytics</h1>
+            <h1 className="auth-landing-title">PlotSignal</h1>
             <p className="auth-landing-tagline">Discover insights, track trends, and explore the world of entertainment</p>
           </div>
 
@@ -1938,7 +1938,7 @@ export default function App() {
             <div className="header-left">
               <div className="brand-group">
                 <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
-                  Movie &amp; TV Analytics
+                  PlotSignal
                 </button>
               </div>
             </div>
@@ -1976,7 +1976,7 @@ export default function App() {
           <div className="header-left">
             <div className="brand-group">
               <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
-                Movie &amp; TV Analytics
+                PlotSignal
               </button>
             </div>
           </div>
@@ -2606,7 +2606,7 @@ export default function App() {
             <div className="header-left">
               <div className="brand-group">
                 <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
-                  Movie &amp; TV Analytics
+                  PlotSignal
                 </button>
               </div>
             </div>
@@ -2750,7 +2750,7 @@ export default function App() {
           <div className="header-left">
             <div className="brand-group">
               <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
-                Movie &amp; TV Analytics
+                PlotSignal
               </button>
             </div>
           </div>
@@ -3300,7 +3300,7 @@ export default function App() {
           <div className="header-left">
             <div className="brand-group">
               <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
-                Movie &amp; TV Analytics
+                PlotSignal
               </button>
             </div>
           </div>
@@ -3530,7 +3530,7 @@ export default function App() {
             <div className="header-left">
             <div className="brand-group">
               <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
-                Movie &amp; TV Analytics
+                PlotSignal
               </button>
             </div>
             {renderSearchField()}
@@ -4175,7 +4175,7 @@ export default function App() {
         <div className="header-left">
           <div className="brand-group">
             <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
-              Movie &amp; TV Analytics
+              PlotSignal
             </button>
           </div>
           {renderSearchField()}
@@ -4213,7 +4213,7 @@ export default function App() {
       </header>
       {tab==='home' && (
         <section className="hero">
-          <h1>Movie &amp; TV Analytics</h1>
+          <h1>PlotSignal</h1>
           <p>Track trends, analyze ratings, and discover insights across your favorite movies and shows.</p>
           <div className="hero-actions">
             <button className="btn-solid btn-lg" onClick={()=>navigateToTab('analytics')}>Get Started</button>
