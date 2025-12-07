@@ -1836,6 +1836,16 @@ export default function App() {
           </div>
         </header>
 
+        {/* Admin Hero Section */}
+        <div className="add-media-hero">
+          <div className="add-media-hero-content">
+            <div className="add-media-hero-text">
+              <h2>Add New {addMediaType === 'movie' ? 'Movie' : 'TV Show'}</h2>
+              <p>Expand your catalog with a new title. Fill in the details below to add it to your collection.</p>
+            </div>
+          </div>
+        </div>
+
         <section className="add-media-layout">
           <div className="add-media-poster">
             <div
@@ -1847,7 +1857,10 @@ export default function App() {
               {addPosterPreview ? (
                 <img src={addPosterPreview} alt="Selected poster" className="poster-preview-image" />
               ) : (
-                <span>Drag photo of movie or TV show here, or click to choose</span>
+                <div className="poster-dropzone-content">
+                  <span className="poster-dropzone-text">Drag & drop a poster image here<br/>or click to browse</span>
+                  <span className="poster-dropzone-hint">Supports JPG, PNG, WebP</span>
+                </div>
               )}
               <input
                 ref={addPosterInputRef}
@@ -1886,7 +1899,7 @@ export default function App() {
                 className={addMediaType === 'tv' ? 'active' : ''}
                 onClick={()=> setAddMediaType('tv')}
               >
-                TV
+                TV Show
               </button>
             </div>
 
@@ -1897,95 +1910,114 @@ export default function App() {
               </div>
             )}
 
-            <div className="form-group">
-              <label className="form-label">Title</label>
-              <input
-                className="form-input"
-                value={addTitle}
-                onChange={e=>setAddTitle(e.target.value)}
-                placeholder="Enter title"
-                required
-              />
-            </div>
-
-            <div className="add-media-inline-row">
-              <div className="form-group">
-                <label className="form-label">Year</label>
-                <input
-                  className="form-input"
-                  value={addYear}
-                  onChange={e=>setAddYear(e.target.value)}
-                  placeholder="e.g. 2024"
-                />
+            {/* Basic Info Section */}
+            <div className="add-media-section">
+              <div className="add-media-section-title">
+                Basic Information
               </div>
               <div className="form-group">
-                <label className="form-label">Language</label>
+                <label className="form-label">Title *</label>
                 <input
                   className="form-input"
-                  value={addLanguage}
-                  onChange={e=>setAddLanguage(e.target.value)}
-                  placeholder="e.g. en"
+                  value={addTitle}
+                  onChange={e=>setAddTitle(e.target.value)}
+                  placeholder="Enter the title"
+                  required
                 />
+              </div>
+
+              <div className="add-media-inline-row">
+                <div className="form-group">
+                  <label className="form-label">Year</label>
+                  <input
+                    className="form-input"
+                    value={addYear}
+                    onChange={e=>setAddYear(e.target.value)}
+                    placeholder="e.g. 2024"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Language</label>
+                  <input
+                    className="form-input"
+                    value={addLanguage}
+                    onChange={e=>setAddLanguage(e.target.value)}
+                    placeholder="e.g. en"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Popularity</label>
+                  <input
+                    className="form-input"
+                    type="number"
+                    step="0.1"
+                    value={addPopularity}
+                    onChange={e=>setAddPopularity(e.target.value)}
+                    placeholder="e.g. 25.3"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Classification Section */}
+            <div className="add-media-section">
+              <div className="add-media-section-title">
+                Classification
               </div>
               <div className="form-group">
-                <label className="form-label">Popularity</label>
+                <label className="form-label">Genre *</label>
                 <input
                   className="form-input"
-                  type="number"
-                  step="0.1"
-                  value={addPopularity}
-                  onChange={e=>setAddPopularity(e.target.value)}
-                  placeholder="e.g. 25.3"
+                  value={addGenre}
+                  onChange={e=>setAddGenre(e.target.value)}
+                  placeholder="e.g. Drama, Action, Comedy"
+                  required
                 />
+                <span className="genre-hint">Separate multiple genres with commas</span>
               </div>
             </div>
 
-            <div className="form-group">
-              <label className="form-label">Genre</label>
-              <input
-                className="form-input"
-                value={addGenre}
-                onChange={e=>setAddGenre(e.target.value)}
-                placeholder="e.g. Drama"
-                required
-              />
-            </div>
+            {/* Media Section */}
+            <div className="add-media-section">
+              <div className="add-media-section-title">
+                Media & Content
+              </div>
+              <div className="form-group">
+                <label className="form-label">Poster Path / URL</label>
+                <input
+                  className="form-input"
+                  value={addPosterPath}
+                  onChange={e=>setAddPosterPath(e.target.value)}
+                  placeholder="/path/on/tmdb.jpg or https://…"
+                />
+              </div>
 
-            <div className="form-group">
-              <label className="form-label">Poster Path / URL</label>
-              <input
-                className="form-input"
-                value={addPosterPath}
-                onChange={e=>setAddPosterPath(e.target.value)}
-                placeholder="/path/on/tmdb.jpg or https://…"
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Synopsis</label>
-              <textarea
-                className="form-input"
-                rows={4}
-                value={addOverview}
-                onChange={e=>setAddOverview(e.target.value)}
-                placeholder="Describe the movie or TV show"
-              />
+              <div className="form-group">
+                <label className="form-label">Synopsis</label>
+                <textarea
+                  className="form-input"
+                  rows={4}
+                  value={addOverview}
+                  onChange={e=>setAddOverview(e.target.value)}
+                  placeholder="Write a brief description of the movie or TV show..."
+                />
+              </div>
             </div>
 
             <div className="add-media-actions">
               <button
                 type="button"
-                className="btn-secondary"
+                className="add-media-cancel"
                 onClick={()=> navigateToTab('movies')}
               >
                 Cancel
               </button>
               <button
-                className="btn-primary"
+                className="add-media-submit"
                 type="submit"
                 disabled={addSubmitting}
               >
-                {addSubmitting ? 'Saving…' : 'Submit'}
+                {addSubmitting ? 'Saving…' : 'Add to Catalog'}
               </button>
             </div>
           </form>
@@ -2242,67 +2274,73 @@ export default function App() {
                   {/* Meta Info Row */}
                   {detailEditMode ? (
                     <div className="detail-edit-form">
-                      <div className="detail-edit-row">
-                        <label>Year:</label>
-                        <input
-                          type="number"
-                          value={editYear}
-                          onChange={(e) => setEditYear(e.target.value)}
-                          className="detail-edit-input"
-                          placeholder="Year"
-                        />
+                      <div className="detail-edit-header">
+                        <span className="detail-edit-header-text">Edit {detailData.media_type === 'movie' ? 'Movie' : 'TV Show'} Details</span>
                       </div>
-                      <div className="detail-edit-row">
-                        <label>Language:</label>
-                        <input
-                          type="text"
-                          value={editLanguage}
-                          onChange={(e) => setEditLanguage(e.target.value)}
-                          className="detail-edit-input"
-                          placeholder="Language code (e.g., en)"
-                        />
-                      </div>
-                      <div className="detail-edit-row">
-                        <label>Genre:</label>
-                        <input
-                          type="text"
-                          value={editGenre}
-                          onChange={(e) => setEditGenre(e.target.value)}
-                          className="detail-edit-input"
-                          placeholder="Genre (comma-separated, e.g., Action, Crime)"
-                        />
-                      </div>
-                      <div className="detail-edit-row">
-                        <label>TMDb Score:</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={editTmdbScore}
-                          onChange={(e) => setEditTmdbScore(e.target.value)}
-                          className="detail-edit-input"
-                          placeholder="Score (0-10)"
-                        />
-                      </div>
-                      <div className="detail-edit-row">
-                        <label>Popularity:</label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={editPopularity}
-                          onChange={(e) => setEditPopularity(e.target.value)}
-                          className="detail-edit-input"
-                          placeholder="Popularity"
-                        />
-                      </div>
-                      <div className="detail-edit-row detail-edit-row-full">
-                        <label>Synopsis:</label>
-                        <textarea
-                          value={editOverview}
-                          onChange={(e) => setEditOverview(e.target.value)}
-                          className="detail-edit-textarea"
-                          placeholder="Synopsis"
-                          rows={5}
-                        />
+                      <div className="detail-edit-grid">
+                        <div className="detail-edit-row">
+                          <label>Year</label>
+                          <input
+                            type="number"
+                            value={editYear}
+                            onChange={(e) => setEditYear(e.target.value)}
+                            className="detail-edit-input"
+                            placeholder="e.g. 2024"
+                          />
+                        </div>
+                        <div className="detail-edit-row">
+                          <label>Language</label>
+                          <input
+                            type="text"
+                            value={editLanguage}
+                            onChange={(e) => setEditLanguage(e.target.value)}
+                            className="detail-edit-input"
+                            placeholder="e.g. en"
+                          />
+                        </div>
+                        <div className="detail-edit-row">
+                          <label>TMDb Score</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={editTmdbScore}
+                            onChange={(e) => setEditTmdbScore(e.target.value)}
+                            className="detail-edit-input"
+                            placeholder="0-10"
+                          />
+                        </div>
+                        <div className="detail-edit-row">
+                          <label>Popularity</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={editPopularity}
+                            onChange={(e) => setEditPopularity(e.target.value)}
+                            className="detail-edit-input"
+                            placeholder="e.g. 25.3"
+                          />
+                        </div>
+                        <div className="detail-edit-row detail-edit-row-full">
+                          <label>Genre</label>
+                          <input
+                            type="text"
+                            value={editGenre}
+                            onChange={(e) => setEditGenre(e.target.value)}
+                            className="detail-edit-input"
+                            placeholder="e.g. Action, Drama, Comedy"
+                          />
+                          <span className="detail-edit-hint">Separate multiple genres with commas</span>
+                        </div>
+                        <div className="detail-edit-row detail-edit-row-full">
+                          <label>Synopsis</label>
+                          <textarea
+                            value={editOverview}
+                            onChange={(e) => setEditOverview(e.target.value)}
+                            className="detail-edit-textarea"
+                            placeholder="Write a brief description..."
+                            rows={5}
+                          />
+                        </div>
                       </div>
                     </div>
                   ) : (
