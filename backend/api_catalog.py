@@ -192,9 +192,9 @@ def _get_or_create_genre_id(name: str) -> int:
 
 def _ensure_auth_bootstrap() -> None:
     """
-    Make sure the users table has password columns and seed demo credentials.
+    Make sure the users table has password columns, is_admin column, and seed demo credentials.
 
-    We add `password_hash` and `password_plain` columns on the fly for older
+    We add `password_hash`, `password_plain`, and `is_admin` columns on the fly for older
     databases, then guarantee the default Admin account exists. Any rows that
     still lack credentials receive a fallback placeholder so the login flow
     behaves deterministically.
@@ -207,6 +207,9 @@ def _ensure_auth_bootstrap() -> None:
         altered = True
     if "password_plain" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN password_plain TEXT")
+        altered = True
+    if "is_admin" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
         altered = True
     if altered:
         conn.commit()
@@ -222,7 +225,7 @@ def _ensure_auth_bootstrap() -> None:
         conn.execute(
             """
             UPDATE users
-            SET password_hash = ?, password_plain = ?
+            SET password_hash = ?, password_plain = ?, is_admin = 1
             WHERE user_id = ?
             """,
             (admin_hash, admin_password, existing_admin["user_id"]),
@@ -230,8 +233,8 @@ def _ensure_auth_bootstrap() -> None:
     else:
         conn.execute(
             """
-            INSERT INTO users (email, password_hash, password_plain)
-            VALUES (?, ?, ?)
+            INSERT INTO users (email, password_hash, password_plain, is_admin)
+            VALUES (?, ?, ?, 1)
             """,
             (admin_email, admin_hash, admin_password),
         )
@@ -245,8 +248,9 @@ def _ensure_auth_bootstrap() -> None:
             password_hash = CASE
                 WHEN password_hash IS NULL THEN ?
                 ELSE password_hash
-            END
-        WHERE password_plain IS NULL OR password_hash IS NULL
+            END,
+            is_admin = COALESCE(is_admin, 0)
+        WHERE password_plain IS NULL OR password_hash IS NULL OR is_admin IS NULL
         """,
         (fallback_plain, fallback_hash),
     )
@@ -274,15 +278,22 @@ def health():
 def list_users():
     """
     Return a lightweight view of demo accounts for the admin UI.
+    ADMIN ONLY: Requires admin privileges to access.
 
     The legacy frontend expects `user`, `email`, and `password` fields.
     The new schema only stores email addresses, so we derive a friendly
     display name from the prefix and return a placeholder password.
     """
     _ensure_auth_bootstrap()
+    
+    # Check admin privileges
+    error_response, status_code = _require_admin()
+    if error_response:
+        return error_response, status_code
+    
     rows = query(
         """
-        SELECT user_id, email, password_plain, password_hash, created_at
+        SELECT user_id, email, password_plain, password_hash, created_at, is_admin
         FROM users
         ORDER BY user_id
         """
@@ -303,6 +314,7 @@ def list_users():
                 "user_id": row_dict.get("user_id"),
                 "password": password_value,
                 "created_at": row_dict.get("created_at"),
+                "is_admin": bool(row_dict.get("is_admin", 0)),
             }
         )
     return jsonify(results)
@@ -375,6 +387,50 @@ def signup():
     return jsonify({"ok": True, "user": display_name, "email": email})
 
 
+def _get_current_user() -> dict | None:
+    """
+    Extract and validate the current user from the request.
+    Expects Authorization header with format: "Bearer user_id:email"
+    Returns user dict with is_admin flag, or None if not authenticated.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    
+    try:
+        token = auth_header[7:]  # Remove "Bearer " prefix
+        user_id_str, email = token.split(":", 1)
+        user_id = int(user_id_str)
+        
+        rows = query(
+            "SELECT user_id, email, is_admin FROM users WHERE user_id = ? AND lower(email) = lower(?)",
+            (user_id, email),
+        )
+        if rows:
+            row = dict(rows[0])
+            return {
+                "user_id": row["user_id"],
+                "email": row["email"],
+                "is_admin": bool(row.get("is_admin", 0)),
+            }
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+def _require_admin():
+    """
+    Check if the current request is from an admin user.
+    Returns (None, None) if admin, otherwise returns (error_response, status_code).
+    """
+    user = _get_current_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    if not user.get("is_admin"):
+        return jsonify({"ok": False, "error": "Admin privileges required"}), 403
+    return None, None
+
+
 @app.post("/api/login")
 def login_route():
     _ensure_auth_bootstrap()
@@ -387,7 +443,7 @@ def login_route():
 
     rows = query(
         """
-        SELECT user_id, email, password_hash, password_plain
+        SELECT user_id, email, password_hash, password_plain, is_admin
         FROM users
         WHERE lower(email) = lower(?)
         LIMIT 1
@@ -414,7 +470,14 @@ def login_route():
         return jsonify({"ok": False, "error": "Invalid credentials"}), 401
 
     display_name = email.split("@", 1)[0] if "@" in email else email
-    return jsonify({"ok": True, "user": display_name, "email": record["email"], "user_id": record["user_id"]})
+    is_admin = bool(record.get("is_admin", 0))
+    return jsonify({
+        "ok": True, 
+        "user": display_name, 
+        "email": record["email"], 
+        "user_id": record["user_id"],
+        "is_admin": is_admin
+    })
 
 
 def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | None = None, language: str | None = None) -> dict[str, Any]:
@@ -553,6 +616,7 @@ def movies_list():
 def create_movie():
     """
     Create a new movie record plus at least one genre association.
+    ADMIN ONLY: Requires admin privileges.
 
     This is used by the admin "Add Movie/TV" UI and expects JSON in the form:
       {
@@ -566,6 +630,11 @@ def create_movie():
         "genre": "Drama"            # required, creates if missing
       }
     """
+    # Check admin privileges
+    error_response, status_code = _require_admin()
+    if error_response:
+        return error_response, status_code
+    
     payload = request.get_json(silent=True) or {}
     title = (payload.get("title") or "").strip()
     if not title:
@@ -649,6 +718,7 @@ def shows_list():
 def create_show():
     """
     Create a new TV show record plus at least one genre association.
+    ADMIN ONLY: Requires admin privileges.
 
     Expected JSON is analogous to create_movie, but the date field is:
       {
@@ -662,6 +732,11 @@ def create_show():
         "genre": "Drama"
       }
     """
+    # Check admin privileges
+    error_response, status_code = _require_admin()
+    if error_response:
+        return error_response, status_code
+    
     payload = request.get_json(silent=True) or {}
     title = (payload.get("title") or "").strip()
     if not title:
@@ -1100,8 +1175,14 @@ def show_detail(show_id: int):
 def delete_movie(movie_id: int):
     """
     Delete a movie and its associated data (genres, reviews, etc.).
+    ADMIN ONLY: Requires admin privileges.
     Also deletes the associated image file if it exists.
     """
+    # Check admin privileges
+    error_response, status_code = _require_admin()
+    if error_response:
+        return error_response, status_code
+    
     conn = get_db()
     try:
         # First check if movie exists
@@ -1151,6 +1232,7 @@ def delete_movie(movie_id: int):
 def update_movie(movie_id: int):
     """
     Update an existing movie record.
+    ADMIN ONLY: Requires admin privileges.
     
     Expected JSON payload (all fields optional except title if provided):
       {
@@ -1164,6 +1246,11 @@ def update_movie(movie_id: int):
         "genre": "Drama"
       }
     """
+    # Check admin privileges
+    error_response, status_code = _require_admin()
+    if error_response:
+        return error_response, status_code
+    
     conn = get_db()
     try:
         # Check if movie exists
@@ -1273,6 +1360,7 @@ def update_movie(movie_id: int):
 def update_show(show_id: int):
     """
     Update an existing TV show record.
+    ADMIN ONLY: Requires admin privileges.
     
     Expected JSON payload (all fields optional except title if provided):
       {
@@ -1286,6 +1374,11 @@ def update_show(show_id: int):
         "genre": "Drama"
       }
     """
+    # Check admin privileges
+    error_response, status_code = _require_admin()
+    if error_response:
+        return error_response, status_code
+    
     conn = get_db()
     try:
         # Check if show exists
@@ -1396,8 +1489,14 @@ def update_show(show_id: int):
 def delete_show(show_id: int):
     """
     Delete a TV show and its associated data (genres, reviews, seasons, episodes, etc.).
+    ADMIN ONLY: Requires admin privileges.
     Also deletes the associated image file if it exists.
     """
+    # Check admin privileges
+    error_response, status_code = _require_admin()
+    if error_response:
+        return error_response, status_code
+    
     conn = get_db()
     try:
         # First check if show exists
@@ -1439,7 +1538,7 @@ def delete_show(show_id: int):
         error_msg = str(exc)
         # Log full traceback for debugging
         import traceback
-        print(f"Error deleting movie {movie_id}: {traceback.format_exc()}")
+        print(f"Error deleting show {show_id}: {traceback.format_exc()}")
         return jsonify({"ok": False, "error": error_msg}), 500
 
 
@@ -1788,8 +1887,14 @@ def _allowed_file(filename: str) -> bool:
 def upload_image():
     """
     Upload an image file and save it to the imageofmovie folder.
+    ADMIN ONLY: Requires admin privileges.
     Returns the relative path that can be stored in the database.
     """
+    # Check admin privileges
+    error_response, status_code = _require_admin()
+    if error_response:
+        return error_response, status_code
+    
     if "file" not in request.files:
         return jsonify({"ok": False, "error": "No file provided"}), 400
     

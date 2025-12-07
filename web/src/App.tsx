@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, type Review, getUserByEmail } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, type Review, getUserByEmail, setAuthToken, clearAuthToken } from './api'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
 type ReleaseFilter = 'all' | 'movie' | 'tv'
 
@@ -199,18 +199,31 @@ export default function App() {
   const [newReleaseTransitionType, setNewReleaseTransitionType] = useState<'fade' | 'slide' | 'none'>('none')
   const newReleasesRequestId = useRef(0)
   // Remember-me support: if a profile was stored and flag set, restore it.
-  const [currentUser, setCurrentUser] = useState<{user:string;email:string;user_id?:number}|null>(() => {
+  const [currentUser, setCurrentUser] = useState<{user:string;email:string;user_id?:number;is_admin?:boolean}|null>(() => {
     try {
       const rawSession = sessionStorage.getItem('currentUser')
       if(rawSession){
-        return JSON.parse(rawSession)
+        const parsed = JSON.parse(rawSession)
+        // Set auth token on initial load if user is logged in
+        if(parsed?.user_id && parsed?.email) {
+          setAuthToken(parsed.user_id, parsed.email)
+        }
+        return parsed
       }
     } catch {}
     try {
       const flag = localStorage.getItem('rememberUser') === '1'
       if(!flag) return null
       const raw = localStorage.getItem('currentUser')
-      return raw? JSON.parse(raw) : null
+      if(raw) {
+        const parsed = JSON.parse(raw)
+        // Set auth token on initial load if user is logged in
+        if(parsed?.user_id && parsed?.email) {
+          setAuthToken(parsed.user_id, parsed.email)
+        }
+        return parsed
+      }
+      return null
     } catch { return null }
     return null
   })
@@ -369,6 +382,7 @@ export default function App() {
   const handleLogout = () => {
     setAccountMenuOpen(false)
     setCurrentUser(null)
+    clearAuthToken()
     try {
       sessionStorage.removeItem('currentUser')
       localStorage.removeItem('currentUser')
@@ -451,21 +465,23 @@ export default function App() {
                 <span className="menu-subtitle">Coming soon</span>
               </span>
             </button>
-            <button
-              type="button"
-              className="account-menu-item"
-              role="menuitem"
-              onClick={() => {
-                setAccountMenuOpen(false)
-                navigateToView('add')
-              }}
-            >
-              <span className="menu-icon" aria-hidden="true">🎬</span>
-              <span className="menu-content">
-                <span className="menu-title">Add Movie/TV</span>
-                <span className="menu-subtitle">Go to catalog to add a title</span>
-              </span>
-            </button>
+            {currentUser?.is_admin && (
+              <button
+                type="button"
+                className="account-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setAccountMenuOpen(false)
+                  navigateToView('add')
+                }}
+              >
+                <span className="menu-icon" aria-hidden="true">🎬</span>
+                <span className="menu-content">
+                  <span className="menu-title">Add Movie/TV</span>
+                  <span className="menu-subtitle">Go to catalog to add a title</span>
+                </span>
+              </button>
+            )}
             <div className="account-menu-separator" role="none" />
             <button
               type="button"
@@ -1237,10 +1253,17 @@ export default function App() {
           setBackendOnline(health?.status === 'healthy')
           const rows = await getUsers()
           setAccounts(rows)
-        } catch (e) {
+        } catch (e: any) {
           setAccounts([])
-          setAccountsError('Could not load accounts. Ensure the backend is running and the dev proxy is active.')
-          setBackendOnline(false)
+          const status = e?.response?.status
+          if(status === 401){
+            setAccountsError('Authentication required. Please log in to view accounts.')
+          } else if(status === 403){
+            setAccountsError('Admin privileges required. Only administrators can view stored accounts.')
+          } else {
+            setAccountsError('Could not load accounts. Ensure the backend is running and the dev proxy is active.')
+            setBackendOnline(false)
+          }
         }
       })()
     }
@@ -1359,8 +1382,15 @@ export default function App() {
         }
         const res = await login(email.trim(), password)
         if(res.ok){
-          const profile = { user: (res as any).user, email: (res as any).email, user_id: (res as any).user_id }
+          const profile = { 
+            user: (res as any).user, 
+            email: (res as any).email, 
+            user_id: (res as any).user_id,
+            is_admin: (res as any).is_admin || false
+          }
           setCurrentUser(profile)
+          // Set auth token for API requests
+          setAuthToken(profile.user_id, profile.email)
           try {
             sessionStorage.setItem('currentUser', JSON.stringify(profile))
           } catch {}
@@ -1595,6 +1625,7 @@ export default function App() {
              <div className="auth-card-footer">
                <p>Already have an account? <button className="link-button" onClick={()=> { 
                  setCurrentUser(null);
+                clearAuthToken();
                 try { sessionStorage.removeItem('currentUser'); localStorage.removeItem('currentUser'); localStorage.removeItem('rememberUser') } catch {}
                  navigateToView('login');
                }}>Sign in</button></p>
@@ -1709,6 +1740,21 @@ export default function App() {
   }
 
   if(view === 'add'){
+    // Admin-only view - redirect non-admins
+    if(!currentUser?.is_admin) {
+      return (
+        <div className="container auth-container">
+          <h1 className="form-title">Access Denied</h1>
+          <p style={{textAlign:'center', color:'#666', marginBottom:'20px'}}>
+            Admin privileges are required to add movies and TV shows.
+          </p>
+          <button className="btn-primary" onClick={() => navigateToTab('home')}>
+            Go to Home
+          </button>
+        </div>
+      )
+    }
+    
     const handlePosterFile = (file: File | null) => {
       if(!file) {
         setAddPosterFile(null)
@@ -2171,103 +2217,105 @@ export default function App() {
                           <h1 className="detail-main-title">{detailData.title}</h1>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        className={`detail-edit-button ${detailEditMode ? 'detail-edit-button-active' : ''}`}
-                        onClick={async () => {
-                          if(detailEditMode) {
-                            // Save changes
-                            if(!detailData) return
-                            setEditSaving(true)
-                            try {
-                              const payload: UpdateMediaPayload = {
-                                title: editTitle || undefined,
-                                overview: editOverview || undefined,
-                                language: editLanguage || undefined,
-                                tmdb_score: editTmdbScore ? parseFloat(editTmdbScore) : undefined,
-                                popularity: editPopularity ? parseFloat(editPopularity) : undefined,
-                                genre: editGenre || undefined,
+                      {currentUser?.is_admin && (
+                        <button
+                          type="button"
+                          className={`detail-edit-button ${detailEditMode ? 'detail-edit-button-active' : ''}`}
+                          onClick={async () => {
+                            if(detailEditMode) {
+                              // Save changes
+                              if(!detailData) return
+                              setEditSaving(true)
+                              try {
+                                const payload: UpdateMediaPayload = {
+                                  title: editTitle || undefined,
+                                  overview: editOverview || undefined,
+                                  language: editLanguage || undefined,
+                                  tmdb_score: editTmdbScore ? parseFloat(editTmdbScore) : undefined,
+                                  popularity: editPopularity ? parseFloat(editPopularity) : undefined,
+                                  genre: editGenre || undefined,
+                                }
+                                
+                                if(detailData.media_type === 'movie') {
+                                  const movieDetail = detailData as MovieDetail
+                                  if(editYear) {
+                                    payload.release_year = parseInt(editYear)
+                                  }
+                                  const result = await updateMedia('movie', movieDetail.movie_id, payload)
+                                  if(!result.ok) {
+                                    alert(`Failed to update: ${result.error}`)
+                                    return
+                                  }
+                                } else {
+                                  const showDetail = detailData as ShowDetail
+                                  if(editYear) {
+                                    payload.first_air_year = parseInt(editYear)
+                                  }
+                                  const result = await updateMedia('tv', showDetail.show_id, payload)
+                                  if(!result.ok) {
+                                    alert(`Failed to update: ${result.error}`)
+                                    return
+                                  }
+                                }
+                                
+                                // Reload detail data
+                                const mediaType = detailData.media_type
+                                const id = mediaType === 'movie' ? (detailData as MovieDetail).movie_id : (detailData as ShowDetail).show_id
+                                if(mediaType === 'movie') {
+                                  const data = await getMovieDetail(id)
+                                  setDetailData({ ...data, media_type: 'movie' })
+                                  setEditTitle(data.title || '')
+                                  setEditOverview(data.overview || '')
+                                  setEditLanguage(data.original_language || '')
+                                  setEditYear(data.release_year?.toString() || '')
+                                  setEditTmdbScore(data.vote_average?.toString() || '')
+                                  setEditPopularity(data.popularity?.toString() || '')
+                                  // Join all genres with comma and space
+                                  setEditGenre(data.genres?.join(', ') || '')
+                                } else {
+                                  const data = await getShowDetail(id)
+                                  setDetailData({ ...data, media_type: 'tv' })
+                                  setEditTitle(data.title || '')
+                                  setEditOverview(data.overview || '')
+                                  setEditLanguage(data.original_language || '')
+                                  const yearMatch = data.first_air_date?.match(/^(\d{4})/)
+                                  setEditYear(yearMatch ? yearMatch[1] : '')
+                                  setEditTmdbScore(data.vote_average?.toString() || '')
+                                  setEditPopularity(data.popularity?.toString() || '')
+                                  // Join all genres with comma and space
+                                  setEditGenre(data.genres?.join(', ') || '')
+                                }
+                                setDetailEditMode(false)
+                              } catch (err: any) {
+                                alert(`Error updating: ${err?.message || 'Unknown error'}`)
+                              } finally {
+                                setEditSaving(false)
                               }
-                              
+                            } else {
+                              // Enter edit mode - initialize fields from current data
+                              setEditTitle(detailData.title || '')
+                              setEditOverview(detailData.overview || '')
+                              setEditLanguage(detailData.original_language || '')
                               if(detailData.media_type === 'movie') {
                                 const movieDetail = detailData as MovieDetail
-                                if(editYear) {
-                                  payload.release_year = parseInt(editYear)
-                                }
-                                const result = await updateMedia('movie', movieDetail.movie_id, payload)
-                                if(!result.ok) {
-                                  alert(`Failed to update: ${result.error}`)
-                                  return
-                                }
+                                setEditYear(movieDetail.release_year?.toString() || '')
                               } else {
                                 const showDetail = detailData as ShowDetail
-                                if(editYear) {
-                                  payload.first_air_year = parseInt(editYear)
-                                }
-                                const result = await updateMedia('tv', showDetail.show_id, payload)
-                                if(!result.ok) {
-                                  alert(`Failed to update: ${result.error}`)
-                                  return
-                                }
-                              }
-                              
-                              // Reload detail data
-                              const mediaType = detailData.media_type
-                              const id = mediaType === 'movie' ? (detailData as MovieDetail).movie_id : (detailData as ShowDetail).show_id
-                              if(mediaType === 'movie') {
-                                const data = await getMovieDetail(id)
-                                setDetailData({ ...data, media_type: 'movie' })
-                                setEditTitle(data.title || '')
-                                setEditOverview(data.overview || '')
-                                setEditLanguage(data.original_language || '')
-                                setEditYear(data.release_year?.toString() || '')
-                                setEditTmdbScore(data.vote_average?.toString() || '')
-                                setEditPopularity(data.popularity?.toString() || '')
-                                // Join all genres with comma and space
-                                setEditGenre(data.genres?.join(', ') || '')
-                              } else {
-                                const data = await getShowDetail(id)
-                                setDetailData({ ...data, media_type: 'tv' })
-                                setEditTitle(data.title || '')
-                                setEditOverview(data.overview || '')
-                                setEditLanguage(data.original_language || '')
-                                const yearMatch = data.first_air_date?.match(/^(\d{4})/)
+                                const yearMatch = showDetail.first_air_date?.match(/^(\d{4})/)
                                 setEditYear(yearMatch ? yearMatch[1] : '')
-                                setEditTmdbScore(data.vote_average?.toString() || '')
-                                setEditPopularity(data.popularity?.toString() || '')
-                                // Join all genres with comma and space
-                                setEditGenre(data.genres?.join(', ') || '')
                               }
-                              setDetailEditMode(false)
-                            } catch (err: any) {
-                              alert(`Error updating: ${err?.message || 'Unknown error'}`)
-                            } finally {
-                              setEditSaving(false)
+                              setEditTmdbScore(detailData.vote_average?.toString() || '')
+                              setEditPopularity(detailData.popularity?.toString() || '')
+                              // Join all genres with comma and space
+                              setEditGenre(detailData.genres?.join(', ') || '')
+                              setDetailEditMode(true)
                             }
-                          } else {
-                            // Enter edit mode - initialize fields from current data
-                            setEditTitle(detailData.title || '')
-                            setEditOverview(detailData.overview || '')
-                            setEditLanguage(detailData.original_language || '')
-                            if(detailData.media_type === 'movie') {
-                              const movieDetail = detailData as MovieDetail
-                              setEditYear(movieDetail.release_year?.toString() || '')
-                            } else {
-                              const showDetail = detailData as ShowDetail
-                              const yearMatch = showDetail.first_air_date?.match(/^(\d{4})/)
-                              setEditYear(yearMatch ? yearMatch[1] : '')
-                            }
-                            setEditTmdbScore(detailData.vote_average?.toString() || '')
-                            setEditPopularity(detailData.popularity?.toString() || '')
-                            // Join all genres with comma and space
-                            setEditGenre(detailData.genres?.join(', ') || '')
-                            setDetailEditMode(true)
-                          }
-                        }}
-                        disabled={editSaving || detailLoading}
-                      >
-                        {detailEditMode ? (editSaving ? 'Saving...' : 'Save') : 'Edit'}
-                      </button>
+                          }}
+                          disabled={editSaving || detailLoading}
+                        >
+                          {detailEditMode ? (editSaving ? 'Saving...' : 'Save') : 'Edit'}
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -3102,123 +3150,127 @@ export default function App() {
               </button>
             </div>
             <div className="filter-pagination">
-              <button
-                type="button"
-                className={`filter-action-button${moviesSelectionMode ? ' active' : ''}`}
-                onClick={() => {
-                  setMoviesSelectionMode(!moviesSelectionMode)
-                  if(moviesSelectionMode){
-                    setMoviesSelected(new Set())
-                  }
-                }}
-              >
-                Select{moviesSelectionMode && moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
+              {currentUser?.is_admin && (
+                <>
+                  <button
+                    type="button"
+                    className={`filter-action-button${moviesSelectionMode ? ' active' : ''}`}
+                    onClick={() => {
+                      setMoviesSelectionMode(!moviesSelectionMode)
+                      if(moviesSelectionMode){
+                        setMoviesSelected(new Set())
+                      }
+                    }}
+                  >
+                    Select{moviesSelectionMode && moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
+                  </button>
+                  <button
+                    type="button"
+                    className="filter-delete-button"
+                    onClick={async () => {
+                      if(moviesSelected.size === 0 || moviesDeleting) return
+                      if(!confirm(`Are you sure you want to delete ${moviesSelected.size} item(s)? This action cannot be undone.`)) return
+                      
+                      // Prevent multiple simultaneous deletions
+                      setMoviesDeleting(true)
+                      setMoviesLoading(true)
+                      
+                      try {
+                        // Get unique IDs (Set already ensures uniqueness, but be explicit)
+                        const selectedIds = Array.from(moviesSelected)
+                        const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
+                        
+                        if(validIds.length === 0) {
+                          alert('No valid items selected for deletion.')
+                          return
+                        }
+                        
+                        // Remove duplicates (shouldn't happen with Set, but be safe)
+                        const uniqueIds = [...new Set(validIds)]
+                        
+                        console.log(`[Delete] Deleting ${uniqueIds.length} movie(s) with IDs:`, uniqueIds)
+                        
+                        const deletePromises = uniqueIds.map(id => 
+                          deleteMedia('movie', id)
+                        )
+                        const results = await Promise.all(deletePromises)
+                        const failed = results.filter(r => !r.ok)
+                        
+                        if(failed.length > 0){
+                          const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
+                          alert(`Failed to delete ${failed.length} item(s):\n${errorMessages}`)
+                        } else {
+                          console.log(`[Delete] Successfully deleted ${uniqueIds.length} movie(s)`)
+                          setMoviesSelected(new Set())
+                          setMoviesSelectionMode(false)
+                          await loadMovies(moviesPage)
+                        }
+                      } catch (err: any) {
+                        console.error('[Delete] Error during deletion:', err)
+                        alert(`Error deleting items: ${err?.message || 'Unknown error'}`)
+                      } finally {
+                        setMoviesLoading(false)
+                        setMoviesDeleting(false)
+                      }
+                    }}
+                    disabled={moviesLoading || moviesDeleting || moviesSelected.size === 0 || !moviesSelectionMode}
+                  >
+                    Delete{moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
               </button>
-              <button
-                type="button"
-                className="filter-delete-button"
-                onClick={async () => {
-                  if(moviesSelected.size === 0 || moviesDeleting) return
-                  if(!confirm(`Are you sure you want to delete ${moviesSelected.size} item(s)? This action cannot be undone.`)) return
-                  
-                  // Prevent multiple simultaneous deletions
-                  setMoviesDeleting(true)
-                  setMoviesLoading(true)
-                  
-                  try {
-                    // Get unique IDs (Set already ensures uniqueness, but be explicit)
-                    const selectedIds = Array.from(moviesSelected)
-                    const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
-                    
-                    if(validIds.length === 0) {
-                      alert('No valid items selected for deletion.')
-                      return
-                    }
-                    
-                    // Remove duplicates (shouldn't happen with Set, but be safe)
-                    const uniqueIds = [...new Set(validIds)]
-                    
-                    console.log(`[Delete] Deleting ${uniqueIds.length} movie(s) with IDs:`, uniqueIds)
-                    
-                    const deletePromises = uniqueIds.map(id => 
-                      deleteMedia('movie', id)
-                    )
-                    const results = await Promise.all(deletePromises)
-                    const failed = results.filter(r => !r.ok)
-                    
-                    if(failed.length > 0){
-                      const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
-                      alert(`Failed to delete ${failed.length} item(s):\n${errorMessages}`)
-                    } else {
-                      console.log(`[Delete] Successfully deleted ${uniqueIds.length} movie(s)`)
-                      setMoviesSelected(new Set())
-                      setMoviesSelectionMode(false)
-                      await loadMovies(moviesPage)
-                    }
-                  } catch (err: any) {
-                    console.error('[Delete] Error during deletion:', err)
-                    alert(`Error deleting items: ${err?.message || 'Unknown error'}`)
-                  } finally {
-                    setMoviesLoading(false)
-                    setMoviesDeleting(false)
-                  }
-                }}
-                disabled={moviesLoading || moviesDeleting || moviesSelected.size === 0 || !moviesSelectionMode}
-              >
-                Delete{moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
-              </button>
-              <button
-                type="button"
-                className="filter-copy-button"
-                onClick={async () => {
-                  if(moviesSelected.size === 0 || moviesCopying) return
-                  if(!confirm(`Are you sure you want to copy ${moviesSelected.size} item(s)?`)) return
-                  
-                  // Prevent multiple simultaneous copy operations
-                  setMoviesCopying(true)
-                  setMoviesLoading(true)
-                  
-                  try {
-                    // Get unique IDs
-                    const selectedIds = Array.from(moviesSelected)
-                    const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
-                    
-                    if(validIds.length === 0) {
-                      alert('No valid items selected for copying.')
-                      return
-                    }
-                    
-                    const uniqueIds = [...new Set(validIds)]
-                    
-                    console.log(`[Copy] Copying ${uniqueIds.length} movie(s) with IDs:`, uniqueIds)
-                    
-                    const copyPromises = uniqueIds.map(id => 
-                      copyMedia('movie', id)
-                    )
-                    const results = await Promise.all(copyPromises)
-                    const failed = results.filter(r => !r.ok)
-                    
-                    if(failed.length > 0){
-                      const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
-                      alert(`Failed to copy ${failed.length} item(s):\n${errorMessages}`)
-                    } else {
-                      console.log(`[Copy] Successfully copied ${uniqueIds.length} movie(s)`)
-                      setMoviesSelected(new Set())
-                      setMoviesSelectionMode(false)
-                      await loadMovies(moviesPage)
-                    }
-                  } catch (err: any) {
-                    console.error('[Copy] Error during copying:', err)
-                    alert(`Error copying items: ${err?.message || 'Unknown error'}`)
-                  } finally {
-                    setMoviesLoading(false)
-                    setMoviesCopying(false)
-                  }
-                }}
-                disabled={moviesLoading || moviesCopying || moviesSelected.size === 0 || !moviesSelectionMode}
-              >
-                Copy{moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
-              </button>
+                  <button
+                    type="button"
+                    className="filter-copy-button"
+                    onClick={async () => {
+                      if(moviesSelected.size === 0 || moviesCopying) return
+                      if(!confirm(`Are you sure you want to copy ${moviesSelected.size} item(s)?`)) return
+                      
+                      // Prevent multiple simultaneous copy operations
+                      setMoviesCopying(true)
+                      setMoviesLoading(true)
+                      
+                      try {
+                        // Get unique IDs
+                        const selectedIds = Array.from(moviesSelected)
+                        const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
+                        
+                        if(validIds.length === 0) {
+                          alert('No valid items selected for copying.')
+                          return
+                        }
+                        
+                        const uniqueIds = [...new Set(validIds)]
+                        
+                        console.log(`[Copy] Copying ${uniqueIds.length} movie(s) with IDs:`, uniqueIds)
+                        
+                        const copyPromises = uniqueIds.map(id => 
+                          copyMedia('movie', id)
+                        )
+                        const results = await Promise.all(copyPromises)
+                        const failed = results.filter(r => !r.ok)
+                        
+                        if(failed.length > 0){
+                          const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
+                          alert(`Failed to copy ${failed.length} item(s):\n${errorMessages}`)
+                        } else {
+                          console.log(`[Copy] Successfully copied ${uniqueIds.length} movie(s)`)
+                          setMoviesSelected(new Set())
+                          setMoviesSelectionMode(false)
+                          await loadMovies(moviesPage)
+                        }
+                      } catch (err: any) {
+                        console.error('[Copy] Error during copying:', err)
+                        alert(`Error copying items: ${err?.message || 'Unknown error'}`)
+                      } finally {
+                        setMoviesLoading(false)
+                        setMoviesCopying(false)
+                      }
+                    }}
+                    disabled={moviesLoading || moviesCopying || moviesSelected.size === 0 || !moviesSelectionMode}
+                  >
+                    Copy{moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 className="filter-pagination-button"
@@ -3340,101 +3392,103 @@ export default function App() {
               </button>
             </div>
             <div className="filter-pagination">
-              <button
-                type="button"
-                className={`filter-action-button${tvSelectionMode ? ' active' : ''}`}
-                onClick={() => {
-                  setTvSelectionMode(!tvSelectionMode)
-                  if(tvSelectionMode){
-                    setTvSelected(new Set())
-                  }
-                }}
-              >
-                Select{tvSelectionMode && tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
-              </button>
-              <button
-                type="button"
-                className="filter-delete-button"
-                onClick={async () => {
-                  if(tvSelected.size === 0 || tvDeleting) return
-                  if(!confirm(`Are you sure you want to delete ${tvSelected.size} item(s)? This action cannot be undone.`)) return
-                  
-                  // Prevent multiple simultaneous deletions
-                  setTvDeleting(true)
-                  setTvLoading(true)
-                  
-                  try {
-                    // Get unique IDs (Set already ensures uniqueness, but be explicit)
-                    const selectedIds = Array.from(tvSelected)
-                    const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
-                    
-                    if(validIds.length === 0) {
-                      alert('No valid items selected for deletion.')
-                      return
-                    }
-                    
-                    // Remove duplicates (shouldn't happen with Set, but be safe)
-                    const uniqueIds = [...new Set(validIds)]
-                    
-                    console.log(`[Delete] Deleting ${uniqueIds.length} TV show(s) with IDs:`, uniqueIds)
-                    
-                    const deletePromises = uniqueIds.map(id => 
-                      deleteMedia('tv', id)
-                    )
-                    const results = await Promise.all(deletePromises)
-                    const failed = results.filter(r => !r.ok)
-                    
-                    if(failed.length > 0){
-                      const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
-                      alert(`Failed to delete ${failed.length} item(s):\n${errorMessages}`)
-                    } else {
-                      console.log(`[Delete] Successfully deleted ${uniqueIds.length} TV show(s)`)
-                      setTvSelected(new Set())
-                      setTvSelectionMode(false)
-                      await loadTv(tvPage)
-                    }
-                  } catch (err: any) {
-                    console.error('[Delete] Error during deletion:', err)
-                    alert(`Error deleting items: ${err?.message || 'Unknown error'}`)
-                  } finally {
-                    setTvLoading(false)
-                    setTvDeleting(false)
-                  }
-                }}
-                disabled={tvLoading || tvDeleting || tvSelected.size === 0 || !tvSelectionMode}
-              >
-                Delete{tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
-              </button>
-              <button
-                type="button"
-                className="filter-copy-button"
-                onClick={async () => {
-                  if(tvSelected.size === 0 || tvCopying) return
-                  if(!confirm(`Are you sure you want to copy ${tvSelected.size} item(s)?`)) return
-                  
-                  // Prevent multiple simultaneous copy operations
-                  setTvCopying(true)
-                  setTvLoading(true)
-                  
-                  try {
-                    // Get unique IDs
-                    const selectedIds = Array.from(tvSelected)
-                    const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
-                    
-                    if(validIds.length === 0) {
-                      alert('No valid items selected for copying.')
-                      return
-                    }
-                    
-                    const uniqueIds = [...new Set(validIds)]
-                    
-                    console.log(`[Copy] Copying ${uniqueIds.length} TV show(s) with IDs:`, uniqueIds)
-                    
-                    const copyPromises = uniqueIds.map(id => 
-                      copyMedia('tv', id)
-                    )
-                    const results = await Promise.all(copyPromises)
-                    const failed = results.filter(r => !r.ok)
+              {currentUser?.is_admin && (
+                <>
+                  <button
+                    type="button"
+                    className={`filter-action-button${tvSelectionMode ? ' active' : ''}`}
+                    onClick={() => {
+                      setTvSelectionMode(!tvSelectionMode)
+                      if(tvSelectionMode){
+                        setTvSelected(new Set())
+                      }
+                    }}
+                  >
+                    Select{tvSelectionMode && tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
+                  </button>
+                  <button
+                    type="button"
+                    className="filter-delete-button"
+                    onClick={async () => {
+                      if(tvSelected.size === 0 || tvDeleting) return
+                      if(!confirm(`Are you sure you want to delete ${tvSelected.size} item(s)? This action cannot be undone.`)) return
+                      
+                      // Prevent multiple simultaneous deletions
+                      setTvDeleting(true)
+                      setTvLoading(true)
+                      
+                      try {
+                        // Get unique IDs (Set already ensures uniqueness, but be explicit)
+                        const selectedIds = Array.from(tvSelected)
+                        const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
+                        
+                        if(validIds.length === 0) {
+                          alert('No valid items selected for deletion.')
+                          return
+                        }
+                        
+                        // Remove duplicates (shouldn't happen with Set, but be safe)
+                        const uniqueIds = [...new Set(validIds)]
+                        
+                        console.log(`[Delete] Deleting ${uniqueIds.length} TV show(s) with IDs:`, uniqueIds)
+                        
+                        const deletePromises = uniqueIds.map(id => 
+                          deleteMedia('tv', id)
+                        )
+                        const results = await Promise.all(deletePromises)
+                        const failed = results.filter(r => !r.ok)
+                        
+                        if(failed.length > 0){
+                          const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
+                          alert(`Failed to delete ${failed.length} item(s):\n${errorMessages}`)
+                        } else {
+                          console.log(`[Delete] Successfully deleted ${uniqueIds.length} TV show(s)`)
+                          setTvSelected(new Set())
+                          setTvSelectionMode(false)
+                          await loadTv(tvPage)
+                        }
+                      } catch (err: any) {
+                        console.error('[Delete] Error during deletion:', err)
+                        alert(`Error deleting items: ${err?.message || 'Unknown error'}`)
+                      } finally {
+                        setTvLoading(false)
+                        setTvDeleting(false)
+                      }
+                    }}
+                    disabled={tvLoading || tvDeleting || tvSelected.size === 0 || !tvSelectionMode}
+                  >
+                    Delete{tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
+                  </button>
+                  <button
+                    type="button"
+                    className="filter-copy-button"
+                    onClick={async () => {
+                      if(tvSelected.size === 0 || tvCopying) return
+                      if(!confirm(`Are you sure you want to copy ${tvSelected.size} item(s)?`)) return
+                      
+                      // Prevent multiple simultaneous copy operations
+                      setTvCopying(true)
+                      setTvLoading(true)
+                      
+                      try {
+                        // Get unique IDs
+                        const selectedIds = Array.from(tvSelected)
+                        const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
+                        
+                        if(validIds.length === 0) {
+                          alert('No valid items selected for copying.')
+                          return
+                        }
+                        
+                        const uniqueIds = [...new Set(validIds)]
+                        
+                        console.log(`[Copy] Copying ${uniqueIds.length} TV show(s) with IDs:`, uniqueIds)
+                        
+                        const copyPromises = uniqueIds.map(id => 
+                          copyMedia('tv', id)
+                        )
+                        const results = await Promise.all(copyPromises)
+                        const failed = results.filter(r => !r.ok)
                     
                     if(failed.length > 0){
                       const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
@@ -3453,10 +3507,12 @@ export default function App() {
                     setTvCopying(false)
                   }
                 }}
-                disabled={tvLoading || tvCopying || tvSelected.size === 0 || !tvSelectionMode}
-              >
-                Copy{tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
-              </button>
+                    disabled={tvLoading || tvCopying || tvSelected.size === 0 || !tvSelectionMode}
+                  >
+                    Copy{tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 className="filter-pagination-button"

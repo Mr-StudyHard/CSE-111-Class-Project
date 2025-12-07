@@ -8,6 +8,29 @@ const envUrl = (import.meta as any).env?.VITE_API_URL as string | undefined
 const baseURL = envUrl && envUrl.trim().length > 0 ? envUrl : '/api'
 export const api = axios.create({ baseURL })
 
+// Auth token management for admin endpoints
+let authToken: string | null = null
+
+export function setAuthToken(userId: number | undefined, email: string | undefined) {
+	if (userId && email) {
+		authToken = `${userId}:${email}`
+	} else {
+		authToken = null
+	}
+}
+
+export function clearAuthToken() {
+	authToken = null
+}
+
+// Add auth header to requests that need it
+api.interceptors.request.use((config) => {
+	if (authToken) {
+		config.headers.Authorization = `Bearer ${authToken}`
+	}
+	return config
+})
+
 export type MediaItem = {
 	id?: number
 	tmdb_id: number
@@ -123,7 +146,7 @@ export async function getNewReleases(limit = 12, type: 'all' | 'movie' | 'tv' = 
 	return (data?.results ?? []) as MediaItem[]
 }
 
-export type LoginResponse = { ok: true; user: string; email: string; user_id?: number } | { ok: false; error: string }
+export type LoginResponse = { ok: true; user: string; email: string; user_id?: number; is_admin?: boolean } | { ok: false; error: string }
 
 export async function login(email: string, password: string) {
 	try {
