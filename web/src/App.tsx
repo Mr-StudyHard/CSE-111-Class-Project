@@ -421,6 +421,11 @@ export default function App() {
       localStorage.removeItem('currentUser')
       localStorage.removeItem('rememberUser')
     } catch {}
+    
+    // Redirect to homepage if logging out from specific pages
+    if (view === 'profile' || view === 'settings' || view === 'add') {
+      navigateToTab('home')
+    }
   }
 
   const avatarInitials = useMemo(() => {
@@ -4763,7 +4768,7 @@ export default function App() {
             </div>
             <div className="filter-pagination">
               {currentUser?.is_admin && (
-                <>
+                <div className="admin-controls-wrapper">
                   <button
                     type="button"
                     className={`filter-action-button${moviesSelectionMode ? ' active' : ''}`}
@@ -4774,7 +4779,7 @@ export default function App() {
                       }
                     }}
                   >
-                    Select{moviesSelectionMode && moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
+                    {moviesSelectionMode ? (moviesSelected.size > 0 ? `${moviesSelected.size} selected` : 'Cancel') : 'Select'}
                   </button>
                   <button
                     type="button"
@@ -4783,12 +4788,10 @@ export default function App() {
                       if(moviesSelected.size === 0 || moviesDeleting) return
                       if(!confirm(`Are you sure you want to delete ${moviesSelected.size} item(s)? This action cannot be undone.`)) return
                       
-                      // Prevent multiple simultaneous deletions
                       setMoviesDeleting(true)
                       setMoviesLoading(true)
                       
                       try {
-                        // Get unique IDs (Set already ensures uniqueness, but be explicit)
                         const selectedIds = Array.from(moviesSelected)
                         const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
                         
@@ -4797,14 +4800,10 @@ export default function App() {
                           return
                         }
                         
-                        // Remove duplicates (shouldn't happen with Set, but be safe)
                         const uniqueIds = [...new Set(validIds)]
-                        
                         console.log(`[Delete] Deleting ${uniqueIds.length} movie(s) with IDs:`, uniqueIds)
                         
-                        const deletePromises = uniqueIds.map(id => 
-                          deleteMedia('movie', id)
-                        )
+                        const deletePromises = uniqueIds.map(id => deleteMedia('movie', id))
                         const results = await Promise.all(deletePromises)
                         const failed = results.filter(r => !r.ok)
                         
@@ -4827,8 +4826,8 @@ export default function App() {
                     }}
                     disabled={moviesLoading || moviesDeleting || moviesSelected.size === 0 || !moviesSelectionMode}
                   >
-                    Delete{moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
-              </button>
+                    Delete
+                  </button>
                   <button
                     type="button"
                     className="filter-copy-button"
@@ -4836,12 +4835,10 @@ export default function App() {
                       if(moviesSelected.size === 0 || moviesCopying) return
                       if(!confirm(`Are you sure you want to copy ${moviesSelected.size} item(s)?`)) return
                       
-                      // Prevent multiple simultaneous copy operations
                       setMoviesCopying(true)
                       setMoviesLoading(true)
                       
                       try {
-                        // Get unique IDs
                         const selectedIds = Array.from(moviesSelected)
                         const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
                         
@@ -4851,12 +4848,9 @@ export default function App() {
                         }
                         
                         const uniqueIds = [...new Set(validIds)]
-                        
                         console.log(`[Copy] Copying ${uniqueIds.length} movie(s) with IDs:`, uniqueIds)
                         
-                        const copyPromises = uniqueIds.map(id => 
-                          copyMedia('movie', id)
-                        )
+                        const copyPromises = uniqueIds.map(id => copyMedia('movie', id))
                         const results = await Promise.all(copyPromises)
                         const failed = results.filter(r => !r.ok)
                         
@@ -4879,9 +4873,9 @@ export default function App() {
                     }}
                     disabled={moviesLoading || moviesCopying || moviesSelected.size === 0 || !moviesSelectionMode}
                   >
-                    Copy{moviesSelected.size > 0 ? ` (${moviesSelected.size})` : ''}
+                    Copy
                   </button>
-                </>
+                </div>
               )}
               <button
                 type="button"
@@ -5005,7 +4999,7 @@ export default function App() {
             </div>
             <div className="filter-pagination">
               {currentUser?.is_admin && (
-                <>
+                <div className="admin-controls-wrapper">
                   <button
                     type="button"
                     className={`filter-action-button${tvSelectionMode ? ' active' : ''}`}
@@ -5016,7 +5010,7 @@ export default function App() {
                       }
                     }}
                   >
-                    Select{tvSelectionMode && tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
+                    {tvSelectionMode ? (tvSelected.size > 0 ? `${tvSelected.size} selected` : 'Cancel') : 'Select'}
                   </button>
                   <button
                     type="button"
@@ -5025,12 +5019,10 @@ export default function App() {
                       if(tvSelected.size === 0 || tvDeleting) return
                       if(!confirm(`Are you sure you want to delete ${tvSelected.size} item(s)? This action cannot be undone.`)) return
                       
-                      // Prevent multiple simultaneous deletions
                       setTvDeleting(true)
                       setTvLoading(true)
                       
                       try {
-                        // Get unique IDs (Set already ensures uniqueness, but be explicit)
                         const selectedIds = Array.from(tvSelected)
                         const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
                         
@@ -5039,14 +5031,10 @@ export default function App() {
                           return
                         }
                         
-                        // Remove duplicates (shouldn't happen with Set, but be safe)
                         const uniqueIds = [...new Set(validIds)]
-                        
                         console.log(`[Delete] Deleting ${uniqueIds.length} TV show(s) with IDs:`, uniqueIds)
                         
-                        const deletePromises = uniqueIds.map(id => 
-                          deleteMedia('tv', id)
-                        )
+                        const deletePromises = uniqueIds.map(id => deleteMedia('tv', id))
                         const results = await Promise.all(deletePromises)
                         const failed = results.filter(r => !r.ok)
                         
@@ -5069,7 +5057,7 @@ export default function App() {
                     }}
                     disabled={tvLoading || tvDeleting || tvSelected.size === 0 || !tvSelectionMode}
                   >
-                    Delete{tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
+                    Delete
                   </button>
                   <button
                     type="button"
@@ -5078,12 +5066,10 @@ export default function App() {
                       if(tvSelected.size === 0 || tvCopying) return
                       if(!confirm(`Are you sure you want to copy ${tvSelected.size} item(s)?`)) return
                       
-                      // Prevent multiple simultaneous copy operations
                       setTvCopying(true)
                       setTvLoading(true)
                       
                       try {
-                        // Get unique IDs
                         const selectedIds = Array.from(tvSelected)
                         const validIds = selectedIds.filter(id => id !== undefined && id !== null && !isNaN(Number(id)))
                         
@@ -5093,37 +5079,34 @@ export default function App() {
                         }
                         
                         const uniqueIds = [...new Set(validIds)]
-                        
                         console.log(`[Copy] Copying ${uniqueIds.length} TV show(s) with IDs:`, uniqueIds)
                         
-                        const copyPromises = uniqueIds.map(id => 
-                          copyMedia('tv', id)
-                        )
+                        const copyPromises = uniqueIds.map(id => copyMedia('tv', id))
                         const results = await Promise.all(copyPromises)
                         const failed = results.filter(r => !r.ok)
-                    
-                    if(failed.length > 0){
-                      const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
-                      alert(`Failed to copy ${failed.length} item(s):\n${errorMessages}`)
-                    } else {
-                      console.log(`[Copy] Successfully copied ${uniqueIds.length} TV show(s)`)
-                      setTvSelected(new Set())
-                      setTvSelectionMode(false)
-                      await loadTv(tvPage)
-                    }
-                  } catch (err: any) {
-                    console.error('[Copy] Error during copying:', err)
-                    alert(`Error copying items: ${err?.message || 'Unknown error'}`)
-                  } finally {
-                    setTvLoading(false)
-                    setTvCopying(false)
-                  }
-                }}
+                        
+                        if(failed.length > 0){
+                          const errorMessages = failed.map(r => r.error || 'Unknown error').join('\n')
+                          alert(`Failed to copy ${failed.length} item(s):\n${errorMessages}`)
+                        } else {
+                          console.log(`[Copy] Successfully copied ${uniqueIds.length} TV show(s)`)
+                          setTvSelected(new Set())
+                          setTvSelectionMode(false)
+                          await loadTv(tvPage)
+                        }
+                      } catch (err: any) {
+                        console.error('[Copy] Error during copying:', err)
+                        alert(`Error copying items: ${err?.message || 'Unknown error'}`)
+                      } finally {
+                        setTvLoading(false)
+                        setTvCopying(false)
+                      }
+                    }}
                     disabled={tvLoading || tvCopying || tvSelected.size === 0 || !tvSelectionMode}
                   >
-                    Copy{tvSelected.size > 0 ? ` (${tvSelected.size})` : ''}
+                    Copy
                   </button>
-                </>
+                </div>
               )}
               <button
                 type="button"
