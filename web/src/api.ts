@@ -146,7 +146,7 @@ export async function getNewReleases(limit = 12, type: 'all' | 'movie' | 'tv' = 
 	return (data?.results ?? []) as MediaItem[]
 }
 
-export type LoginResponse = { ok: true; user: string; email: string; user_id?: number; is_admin?: boolean } | { ok: false; error: string }
+export type LoginResponse = { ok: true; user: string; email: string; user_id?: number; display_name?: string; is_admin?: boolean } | { ok: false; error: string }
 
 export async function login(email: string, password: string) {
 	try {
@@ -392,4 +392,40 @@ export async function createMedia(payload: CreateMediaPayload) {
 	const { media_type, ...body } = payload
 	const { data } = await api.post(path, body)
 	return data as { ok: boolean; id?: number; tmdb_id?: number; title?: string; error?: string }
+}
+
+export type UserSettings = {
+	user_id: number
+	email: string
+	display_name?: string
+	created_at?: string
+	is_admin: boolean
+}
+
+export async function getUserSettings() {
+	try {
+		const { data } = await api.get('/user/settings')
+		return data as { ok: true } & UserSettings | { ok: false; error: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to fetch settings'
+		return { ok: false, error: String(msg) } as { ok: false; error: string }
+	}
+}
+
+export type UpdateSettingsPayload = {
+	current_password: string
+	new_email?: string
+	new_password?: string
+}
+
+export async function updateUserSettings(payload: UpdateSettingsPayload) {
+	try {
+		const { data } = await api.put('/user/settings', payload)
+		return data as { ok: boolean; message?: string; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to update settings'
+		return { ok: false, error: String(msg) }
+	}
 }

@@ -192,9 +192,9 @@ def _get_or_create_genre_id(name: str) -> int:
 
 def _ensure_auth_bootstrap() -> None:
     """
-    Make sure the users table has password columns, is_admin column, and seed demo credentials.
+    Make sure the users table has password columns, display_name column, and seed demo credentials.
 
-    We add `password_hash`, `password_plain`, and `is_admin` columns on the fly for older
+    We add `password_hash`, `password_plain`, and `display_name` columns on the fly for older
     databases, then guarantee the default Admin account exists. Any rows that
     still lack credentials receive a fallback placeholder so the login flow
     behaves deterministically.
@@ -208,14 +208,38 @@ def _ensure_auth_bootstrap() -> None:
     if "password_plain" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN password_plain TEXT")
         altered = True
-    if "is_admin" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+    if "display_name" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
         altered = True
+        # Backfill display_name from email for existing users
+        all_users = conn.execute("SELECT user_id, email FROM users").fetchall()
+        for user_row in all_users:
+            # Handle both dict-like (Row) and tuple-like access
+            try:
+                email = user_row["email"]
+                user_id = user_row["user_id"]
+            except (TypeError, KeyError):
+                # Fallback for tuple access
+                user_id, email = user_row[0], user_row[1]
+            
+            if not email:
+                continue
+                
+            if "@" in email:
+                display_name = email.split("@", 1)[0]
+            else:
+                display_name = email
+                
+            conn.execute(
+                "UPDATE users SET display_name = ? WHERE user_id = ?",
+                (display_name, user_id)
+            )
     if altered:
         conn.commit()
 
     admin_email = "Admin@Test.com"
     admin_password = "Admin"
+    admin_display_name = "Admin"
     admin_hash = generate_password_hash(admin_password)
     existing_admin = conn.execute(
         "SELECT user_id FROM users WHERE lower(email) = lower(?) LIMIT 1",
@@ -225,18 +249,18 @@ def _ensure_auth_bootstrap() -> None:
         conn.execute(
             """
             UPDATE users
-            SET password_hash = ?, password_plain = ?, is_admin = 1
+            SET password_hash = ?, password_plain = ?, display_name = COALESCE(display_name, ?)
             WHERE user_id = ?
             """,
-            (admin_hash, admin_password, existing_admin["user_id"]),
+            (admin_hash, admin_password, admin_display_name, existing_admin["user_id"]),
         )
     else:
         conn.execute(
             """
-            INSERT INTO users (email, password_hash, password_plain, is_admin)
-            VALUES (?, ?, ?, 1)
+            INSERT INTO users (email, password_hash, password_plain, display_name)
+            VALUES (?, ?, ?, ?)
             """,
-            (admin_email, admin_hash, admin_password),
+            (admin_email, admin_hash, admin_password, admin_display_name),
         )
 
     fallback_plain = "changeme"
@@ -248,9 +272,8 @@ def _ensure_auth_bootstrap() -> None:
             password_hash = CASE
                 WHEN password_hash IS NULL THEN ?
                 ELSE password_hash
-            END,
-            is_admin = COALESCE(is_admin, 0)
-        WHERE password_plain IS NULL OR password_hash IS NULL OR is_admin IS NULL
+            END
+        WHERE password_plain IS NULL OR password_hash IS NULL
         """,
         (fallback_plain, fallback_hash),
     )
@@ -278,22 +301,15 @@ def health():
 def list_users():
     """
     Return a lightweight view of demo accounts for the admin UI.
-    ADMIN ONLY: Requires admin privileges to access.
 
     The legacy frontend expects `user`, `email`, and `password` fields.
     The new schema only stores email addresses, so we derive a friendly
     display name from the prefix and return a placeholder password.
     """
     _ensure_auth_bootstrap()
-    
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     rows = query(
         """
-        SELECT user_id, email, password_plain, password_hash, created_at, is_admin
+        SELECT user_id, email, password_plain, password_hash, created_at
         FROM users
         ORDER BY user_id
         """
@@ -314,7 +330,6 @@ def list_users():
                 "user_id": row_dict.get("user_id"),
                 "password": password_value,
                 "created_at": row_dict.get("created_at"),
-                "is_admin": bool(row_dict.get("is_admin", 0)),
             }
         )
     return jsonify(results)
@@ -347,6 +362,190 @@ def get_user_by_email():
     return jsonify({"ok": True, "user_id": row["user_id"], "email": row["email"]})
 
 
+def _get_current_user() -> dict | None:
+    """
+    Extract and validate the current user from the request.
+    Expects Authorization header with format: "Bearer user_id:email"
+    Returns user dict, or None if not authenticated.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    
+    try:
+        token = auth_header[7:]  # Remove "Bearer " prefix
+        user_id_str, email = token.split(":", 1)
+        user_id = int(user_id_str)
+        
+        rows = query(
+            "SELECT user_id, email FROM users WHERE user_id = ? AND lower(email) = lower(?)",
+            (user_id, email),
+        )
+        if rows:
+            row = dict(rows[0])
+            return {
+                "user_id": row["user_id"],
+                "email": row["email"],
+            }
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+@app.get("/api/user/settings")
+def get_user_settings():
+    """
+    Get current user's settings.
+    Requires authentication via Authorization header.
+    """
+    try:
+        _ensure_auth_bootstrap()  # Ensure display_name column exists
+        user = _get_current_user()
+        if not user:
+            return jsonify({"ok": False, "error": "Authentication required"}), 401
+        
+        rows = query(
+            """
+            SELECT user_id, email, display_name, created_at
+            FROM users
+            WHERE user_id = ?
+            LIMIT 1
+            """,
+            (user["user_id"],),
+        )
+        
+        if not rows:
+            return jsonify({"ok": False, "error": "User not found"}), 404
+        
+        row = dict(rows[0])
+        # If display_name is not set, derive from email
+        display_name = row.get("display_name")
+        if not display_name:
+            email = row.get("email", "")
+            display_name = email.split("@", 1)[0] if "@" in email else email
+        
+        return jsonify({
+            "ok": True,
+            "user_id": row["user_id"],
+            "email": row["email"],
+            "display_name": display_name,
+            "created_at": row.get("created_at"),
+            "is_admin": False  # Admin system was removed, always False
+        })
+    except Exception as exc:
+        import traceback
+        print(f"Error in get_user_settings: {traceback.format_exc()}")
+        return jsonify({"ok": False, "error": f"Server error: {str(exc)}"}), 500
+
+
+@app.put("/api/user/settings")
+def update_user_settings():
+    """
+    Update current user's settings (display_name, email and/or password).
+    Requires authentication via Authorization header.
+    
+    Expected JSON:
+      {
+        "current_password": "current",  # required for verification
+        "display_name": "John Doe",    # optional
+        "new_email": "new@email.com",   # optional
+        "new_password": "newpassword"   # optional
+      }
+    """
+    _ensure_auth_bootstrap()  # Ensure display_name column exists
+    user = _get_current_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    payload = request.get_json(silent=True) or {}
+    current_password = (payload.get("current_password") or "").strip()
+    display_name = (payload.get("display_name") or "").strip()
+    new_email = (payload.get("new_email") or "").strip()
+    new_password = (payload.get("new_password") or "").strip()
+    
+    if not current_password:
+        return jsonify({"ok": False, "error": "Current password is required"}), 400
+    
+    if not display_name and not new_email and not new_password:
+        return jsonify({"ok": False, "error": "No changes specified"}), 400
+    
+    conn = get_db()
+    
+    # Verify current password
+    rows = query(
+        "SELECT user_id, password_hash, password_plain FROM users WHERE user_id = ?",
+        (user["user_id"],),
+    )
+    
+    if not rows:
+        return jsonify({"ok": False, "error": "User not found"}), 404
+    
+    user_row = dict(rows[0])
+    stored_hash = user_row.get("password_hash")
+    stored_plain = user_row.get("password_plain")
+    
+    # Verify current password
+    verified = False
+    if stored_hash:
+        try:
+            verified = check_password_hash(stored_hash, current_password)
+        except ValueError:
+            verified = False
+    if not verified and stored_plain is not None:
+        verified = stored_plain == current_password
+    
+    if not verified:
+        return jsonify({"ok": False, "error": "Current password is incorrect"}), 401
+    
+    try:
+        updates = []
+        params = []
+        
+        # Update display_name if provided
+        if display_name:
+            if len(display_name) > 50:
+                return jsonify({"ok": False, "error": "Display name must be 50 characters or less"}), 400
+            updates.append("display_name = ?")
+            params.append(display_name)
+        
+        # Update email if provided
+        if new_email:
+            # Check if email already exists for another user
+            existing = conn.execute(
+                "SELECT user_id FROM users WHERE lower(email) = lower(?) AND user_id != ?",
+                (new_email, user["user_id"]),
+            ).fetchone()
+            
+            if existing:
+                return jsonify({"ok": False, "error": "Email already in use"}), 409
+            
+            updates.append("email = ?")
+            params.append(new_email)
+        
+        # Update password if provided
+        if new_password:
+            new_hash = generate_password_hash(new_password)
+            updates.append("password_hash = ?")
+            params.append(new_hash)
+            updates.append("password_plain = ?")
+            params.append(new_password)
+        
+        if updates:
+            params.append(user["user_id"])
+            sql = f"UPDATE users SET {', '.join(updates)} WHERE user_id = ?"
+            conn.execute(sql, tuple(params))
+            conn.commit()
+        
+        return jsonify({"ok": True, "message": "Settings updated successfully"})
+    
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return jsonify({"ok": False, "error": "Email already in use"}), 409
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": f"Failed to update settings: {str(exc)}"}), 500
+
+
 @app.post("/api/signup")
 def signup():
     _ensure_auth_bootstrap()
@@ -354,6 +553,7 @@ def signup():
     email = (payload.get("email") or "").strip()
     password = (payload.get("password") or "").strip()
     username = (payload.get("username") or "").strip()
+    display_name = (payload.get("display_name") or "").strip()
 
     if not email or not password:
         return jsonify({"ok": False, "error": "Missing email or password"}), 400
@@ -366,14 +566,19 @@ def signup():
     if exists:
         return jsonify({"ok": False, "error": "Email already exists"}), 409
 
+    # Use display_name if provided, otherwise use username, otherwise derive from email
+    final_display_name = display_name or username
+    if not final_display_name:
+        final_display_name = email.split("@", 1)[0] if "@" in email else email
+
     hashed = generate_password_hash(password)
     try:
         conn.execute(
             """
-            INSERT INTO users (email, password_hash, password_plain)
-            VALUES (?, ?, ?)
+            INSERT INTO users (email, password_hash, password_plain, display_name)
+            VALUES (?, ?, ?, ?)
             """,
-            (email, hashed, password),
+            (email, hashed, password, final_display_name),
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -383,52 +588,7 @@ def signup():
         conn.rollback()
         return jsonify({"ok": False, "error": f"server-error: {exc}"}), 500
 
-    display_name = username or (email.split("@", 1)[0] if "@" in email else email)
-    return jsonify({"ok": True, "user": display_name, "email": email})
-
-
-def _get_current_user() -> dict | None:
-    """
-    Extract and validate the current user from the request.
-    Expects Authorization header with format: "Bearer user_id:email"
-    Returns user dict with is_admin flag, or None if not authenticated.
-    """
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return None
-    
-    try:
-        token = auth_header[7:]  # Remove "Bearer " prefix
-        user_id_str, email = token.split(":", 1)
-        user_id = int(user_id_str)
-        
-        rows = query(
-            "SELECT user_id, email, is_admin FROM users WHERE user_id = ? AND lower(email) = lower(?)",
-            (user_id, email),
-        )
-        if rows:
-            row = dict(rows[0])
-            return {
-                "user_id": row["user_id"],
-                "email": row["email"],
-                "is_admin": bool(row.get("is_admin", 0)),
-            }
-    except (ValueError, IndexError):
-        pass
-    return None
-
-
-def _require_admin():
-    """
-    Check if the current request is from an admin user.
-    Returns (None, None) if admin, otherwise returns (error_response, status_code).
-    """
-    user = _get_current_user()
-    if not user:
-        return jsonify({"ok": False, "error": "Authentication required"}), 401
-    if not user.get("is_admin"):
-        return jsonify({"ok": False, "error": "Admin privileges required"}), 403
-    return None, None
+    return jsonify({"ok": True, "user": final_display_name, "email": email, "display_name": final_display_name})
 
 
 @app.post("/api/login")
@@ -443,7 +603,7 @@ def login_route():
 
     rows = query(
         """
-        SELECT user_id, email, password_hash, password_plain, is_admin
+        SELECT user_id, email, password_hash, password_plain, display_name
         FROM users
         WHERE lower(email) = lower(?)
         LIMIT 1
@@ -469,14 +629,17 @@ def login_route():
     if not verified:
         return jsonify({"ok": False, "error": "Invalid credentials"}), 401
 
-    display_name = email.split("@", 1)[0] if "@" in email else email
-    is_admin = bool(record.get("is_admin", 0))
+    # Use display_name if available, otherwise derive from email
+    display_name = record.get("display_name")
+    if not display_name:
+        display_name = email.split("@", 1)[0] if "@" in email else email
+    
     return jsonify({
-        "ok": True, 
-        "user": display_name, 
-        "email": record["email"], 
+        "ok": True,
+        "user": display_name,
+        "email": record["email"],
         "user_id": record["user_id"],
-        "is_admin": is_admin
+        "display_name": display_name
     })
 
 
@@ -616,7 +779,6 @@ def movies_list():
 def create_movie():
     """
     Create a new movie record plus at least one genre association.
-    ADMIN ONLY: Requires admin privileges.
 
     This is used by the admin "Add Movie/TV" UI and expects JSON in the form:
       {
@@ -630,11 +792,6 @@ def create_movie():
         "genre": "Drama"            # required, creates if missing
       }
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     payload = request.get_json(silent=True) or {}
     title = (payload.get("title") or "").strip()
     if not title:
@@ -718,7 +875,6 @@ def shows_list():
 def create_show():
     """
     Create a new TV show record plus at least one genre association.
-    ADMIN ONLY: Requires admin privileges.
 
     Expected JSON is analogous to create_movie, but the date field is:
       {
@@ -732,11 +888,6 @@ def create_show():
         "genre": "Drama"
       }
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     payload = request.get_json(silent=True) or {}
     title = (payload.get("title") or "").strip()
     if not title:
@@ -1175,14 +1326,8 @@ def show_detail(show_id: int):
 def delete_movie(movie_id: int):
     """
     Delete a movie and its associated data (genres, reviews, etc.).
-    ADMIN ONLY: Requires admin privileges.
     Also deletes the associated image file if it exists.
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     conn = get_db()
     try:
         # First check if movie exists
@@ -1232,7 +1377,6 @@ def delete_movie(movie_id: int):
 def update_movie(movie_id: int):
     """
     Update an existing movie record.
-    ADMIN ONLY: Requires admin privileges.
     
     Expected JSON payload (all fields optional except title if provided):
       {
@@ -1246,11 +1390,6 @@ def update_movie(movie_id: int):
         "genre": "Drama"
       }
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     conn = get_db()
     try:
         # Check if movie exists
@@ -1360,7 +1499,6 @@ def update_movie(movie_id: int):
 def update_show(show_id: int):
     """
     Update an existing TV show record.
-    ADMIN ONLY: Requires admin privileges.
     
     Expected JSON payload (all fields optional except title if provided):
       {
@@ -1374,11 +1512,6 @@ def update_show(show_id: int):
         "genre": "Drama"
       }
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     conn = get_db()
     try:
         # Check if show exists
@@ -1489,14 +1622,8 @@ def update_show(show_id: int):
 def delete_show(show_id: int):
     """
     Delete a TV show and its associated data (genres, reviews, seasons, episodes, etc.).
-    ADMIN ONLY: Requires admin privileges.
     Also deletes the associated image file if it exists.
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     conn = get_db()
     try:
         # First check if show exists
@@ -1538,7 +1665,7 @@ def delete_show(show_id: int):
         error_msg = str(exc)
         # Log full traceback for debugging
         import traceback
-        print(f"Error deleting show {show_id}: {traceback.format_exc()}")
+        print(f"Error deleting movie {movie_id}: {traceback.format_exc()}")
         return jsonify({"ok": False, "error": error_msg}), 500
 
 
@@ -1887,14 +2014,8 @@ def _allowed_file(filename: str) -> bool:
 def upload_image():
     """
     Upload an image file and save it to the imageofmovie folder.
-    ADMIN ONLY: Requires admin privileges.
     Returns the relative path that can be stored in the database.
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     if "file" not in request.files:
         return jsonify({"ok": False, "error": "No file provided"}), 400
     

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, type Review, getUserByEmail, setAuthToken, clearAuthToken } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, type Review, getUserByEmail, setAuthToken, clearAuthToken, getUserSettings, updateUserSettings, type UserSettings } from './api'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
 type ReleaseFilter = 'all' | 'movie' | 'tv'
 
@@ -129,6 +129,7 @@ export default function App() {
     if (path === '/login') return 'login'
     if (path === '/signup') return 'signup'
     if (path === '/accounts') return 'accounts'
+    if (path === '/settings') return 'settings'
     if (path === '/add') return 'add'
     if (path.startsWith('/movie/') || path.startsWith('/show/')) return 'detail'
     return 'app'
@@ -199,7 +200,7 @@ export default function App() {
   const [newReleaseTransitionType, setNewReleaseTransitionType] = useState<'fade' | 'slide' | 'none'>('none')
   const newReleasesRequestId = useRef(0)
   // Remember-me support: if a profile was stored and flag set, restore it.
-  const [currentUser, setCurrentUser] = useState<{user:string;email:string;user_id?:number;is_admin?:boolean}|null>(() => {
+  const [currentUser, setCurrentUser] = useState<{user:string;email:string;user_id?:number;display_name?:string;is_admin?:boolean}|null>(() => {
     try {
       const rawSession = sessionStorage.getItem('currentUser')
       if(rawSession){
@@ -279,6 +280,16 @@ export default function App() {
   const [addPosterPreview, setAddPosterPreview] = useState<string | null>(null)
   const [addPosterFile, setAddPosterFile] = useState<File | null>(null)
   const addPosterInputRef = useRef<HTMLInputElement | null>(null)
+  const [settingsData, setSettingsData] = useState<UserSettings | null>(null)
+  const [settingsLoading, setSettingsLoading] = useState(false)
+  const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [settingsCurrentPassword, setSettingsCurrentPassword] = useState('')
+  const [settingsDisplayName, setSettingsDisplayName] = useState('')
+  const [settingsNewEmail, setSettingsNewEmail] = useState('')
+  const [settingsNewPassword, setSettingsNewPassword] = useState('')
+  const [settingsConfirmPassword, setSettingsConfirmPassword] = useState('')
+  const [settingsSaving, setSettingsSaving] = useState(false)
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null)
   const primaryNav = [
     { id: 'analytics', label: 'Analytics' },
     { id: 'movies', label: 'Movies' },
@@ -391,12 +402,12 @@ export default function App() {
   }
 
   const avatarInitials = useMemo(() => {
-    const name = currentUser?.user ?? ''
+    const name = currentUser?.display_name || currentUser?.user || ''
     if(!name.trim()) return ''
     const parts = name.trim().split(/\s+/).slice(0, 2)
     const letters = parts.map(part => part.charAt(0)?.toUpperCase() ?? '').join('')
     return letters || ''
-  }, [currentUser?.user])
+  }, [currentUser?.display_name, currentUser?.user])
 
   const renderAccountControls = () => {
     if(!currentUser){
@@ -410,7 +421,7 @@ export default function App() {
         </button>
       )
     }
-    const displayName = currentUser.user?.trim() || 'Signed in'
+    const displayName = currentUser.display_name || currentUser.user?.trim() || 'Signed in'
     const displayEmail = currentUser.email || ''
     return (
       <div className={`header-account${accountMenuOpen ? ' open' : ''}`} ref={accountMenuRef}>
@@ -458,11 +469,19 @@ export default function App() {
                 <span className="menu-subtitle">Coming soon</span>
               </span>
             </button>
-            <button type="button" className="account-menu-item" role="menuitem" disabled>
+            <button
+              type="button"
+              className="account-menu-item"
+              role="menuitem"
+              onClick={() => {
+                setAccountMenuOpen(false)
+                navigateToView('settings')
+              }}
+            >
               <span className="menu-icon" aria-hidden="true">⚙️</span>
               <span className="menu-content">
                 <span className="menu-title">User Settings</span>
-                <span className="menu-subtitle">Coming soon</span>
+                <span className="menu-subtitle">Change password & email</span>
               </span>
             </button>
             {currentUser?.is_admin && (
@@ -1269,6 +1288,46 @@ export default function App() {
     }
   }, [view])
 
+  // Load user settings when settings view is opened
+  useEffect(() => {
+    if(view === 'settings'){
+      (async () => {
+        setSettingsLoading(true)
+        setSettingsError(null)
+        setSettingsSuccess(null)
+        try {
+          const result = await getUserSettings()
+          if(result.ok){
+            setSettingsData({
+              user_id: result.user_id,
+              email: result.email,
+              display_name: result.display_name,
+              created_at: result.created_at,
+              is_admin: result.is_admin
+            })
+            setSettingsDisplayName(result.display_name || result.email.split('@')[0] || '')
+            setSettingsNewEmail(result.email)
+          } else {
+            setSettingsError(result.error || 'Failed to load settings')
+          }
+        } catch (e: any) {
+          setSettingsError(e?.message || 'Failed to load settings')
+        } finally {
+          setSettingsLoading(false)
+        }
+      })()
+    } else {
+      // Reset form when leaving settings view
+      setSettingsCurrentPassword('')
+      setSettingsDisplayName('')
+      setSettingsNewEmail('')
+      setSettingsNewPassword('')
+      setSettingsConfirmPassword('')
+      setSettingsSuccess(null)
+      setSettingsError(null)
+    }
+  }, [view])
+
   useEffect(() => {
     if(view !== 'detail'){
       setDetailLoading(false)
@@ -1383,9 +1442,10 @@ export default function App() {
         const res = await login(email.trim(), password)
         if(res.ok){
           const profile = { 
-            user: (res as any).user, 
+            user: (res as any).display_name || (res as any).user, 
             email: (res as any).email, 
             user_id: (res as any).user_id,
+            display_name: (res as any).display_name || (res as any).user,
             is_admin: (res as any).is_admin || false
           }
           setCurrentUser(profile)
@@ -1735,6 +1795,389 @@ export default function App() {
           <button className="btn-link" onClick={()=>navigateToView('login')}>Back</button>
         </div>
         <p style={{fontSize:'12px', color:'#666', marginTop:'8px'}}>Passwords are stored hashed for security and shown here as stored values.</p>
+      </div>
+    )
+  }
+
+  if(view === 'settings'){
+    if(!currentUser){
+      return (
+        <div className="container">
+          <header className="header">
+            <div className="header-left">
+              <div className="brand-group">
+                <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
+                  Movie &amp; TV Analytics
+                </button>
+              </div>
+            </div>
+            <div className="header-right">
+              <div className="header-actions">
+                {renderAccountControls()}
+              </div>
+            </div>
+          </header>
+          <section className="settings-layout">
+            <div className="card" style={{
+              padding:'32px',
+              background:'rgba(20, 20, 28, 0.95)',
+              border:'1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius:'16px',
+              textAlign:'center'
+            }}>
+              <h1 className="form-title" style={{marginBottom:12, color:'var(--text)'}}>User Settings</h1>
+              <p style={{textAlign:'center', color:'var(--muted)', marginBottom:'24px'}}>
+                Please log in to access your account settings.
+              </p>
+              <button className="btn-primary" onClick={() => navigateToView('login')} style={{width:'100%'}}>
+                Go to Login
+              </button>
+              <div className="auth-card-footer" style={{marginTop:'20px'}}>
+                <button className="back-link-button" onClick={()=>navigateToView('app')}>← Back to app</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )
+    }
+
+    const getPasswordStrength = (password: string) => {
+      if(!password) return { score: 0, label: '', color: 'rgba(255, 255, 255, 0.2)' }
+      let score = 0
+      if(password.length >= 8) score++
+      if(/[a-z]/.test(password) && /[A-Z]/.test(password)) score++
+      if(/\d/.test(password)) score++
+      if(/[^a-zA-Z0-9]/.test(password)) score++
+      
+      if(score <= 1) return { score, label: 'Weak', color: '#ef5350' }
+      if(score === 2) return { score, label: 'Fair', color: '#ffa726' }
+      if(score === 3) return { score, label: 'Good', color: '#66bb6a' }
+      return { score, label: 'Strong', color: '#81c784' }
+    }
+
+    const passwordStrength = getPasswordStrength(settingsNewPassword)
+
+    const handleSettingsSubmit = async (ev: React.FormEvent) => {
+      ev.preventDefault()
+      setSettingsError(null)
+      setSettingsSuccess(null)
+
+      if(!settingsCurrentPassword){
+        setSettingsError('Current password is required to make changes')
+        return
+      }
+
+      if(settingsNewPassword && settingsNewPassword !== settingsConfirmPassword){
+        setSettingsError('New passwords do not match')
+        return
+      }
+
+      const currentDisplayName = settingsData?.display_name || settingsData?.email?.split('@')[0] || ''
+      const hasDisplayNameChange = settingsDisplayName && settingsDisplayName.trim() !== currentDisplayName.trim()
+      const hasEmailChange = settingsNewEmail && settingsNewEmail !== settingsData?.email
+      const hasPasswordChange = settingsNewPassword && settingsNewPassword.length > 0
+
+      if(!hasDisplayNameChange && !hasEmailChange && !hasPasswordChange){
+        setSettingsError('Please make at least one change before saving')
+        return
+      }
+
+      if(settingsDisplayName && settingsDisplayName.trim().length > 50){
+        setSettingsError('Display name must be 50 characters or less')
+        return
+      }
+
+      setSettingsSaving(true)
+
+      try {
+        const result = await updateUserSettings({
+          current_password: settingsCurrentPassword,
+          display_name: hasDisplayNameChange ? settingsDisplayName.trim() : undefined,
+          new_email: hasEmailChange ? settingsNewEmail : undefined,
+          new_password: hasPasswordChange ? settingsNewPassword : undefined
+        })
+
+        if(result.ok){
+          setSettingsSuccess(result.message || 'Your settings have been updated.')
+          setSettingsCurrentPassword('')
+          setSettingsNewPassword('')
+          setSettingsConfirmPassword('')
+          
+          // Update current user state if display_name or email changed
+          if(hasDisplayNameChange || hasEmailChange){
+            const updatedUser = {
+              ...currentUser,
+              email: hasEmailChange ? settingsNewEmail : currentUser?.email,
+              user: hasDisplayNameChange ? settingsDisplayName.trim() : (hasEmailChange ? settingsNewEmail.split('@')[0] : currentUser?.user),
+              display_name: hasDisplayNameChange ? settingsDisplayName.trim() : currentUser?.display_name
+            }
+            setCurrentUser(updatedUser)
+            if(hasEmailChange && updatedUser.user_id && updatedUser.email){
+              setAuthToken(updatedUser.user_id, updatedUser.email)
+            }
+            try {
+              sessionStorage.setItem('currentUser', JSON.stringify(updatedUser))
+              if(remember){
+                localStorage.setItem('currentUser', JSON.stringify(updatedUser))
+              }
+            } catch {}
+          }
+          
+          const refreshResult = await getUserSettings()
+          if(refreshResult.ok){
+            setSettingsData({
+              user_id: refreshResult.user_id,
+              email: refreshResult.email,
+              display_name: refreshResult.display_name,
+              created_at: refreshResult.created_at,
+              is_admin: refreshResult.is_admin
+            })
+            setSettingsDisplayName(refreshResult.display_name || refreshResult.email.split('@')[0] || '')
+            setSettingsNewEmail(refreshResult.email)
+          }
+        } else {
+          setSettingsError(result.error || 'Failed to update settings')
+        }
+      } catch (e: any) {
+        setSettingsError(e?.message || 'An unexpected error occurred. Please try again.')
+      } finally {
+        setSettingsSaving(false)
+      }
+    }
+
+    return (
+      <div className="container">
+        <header className="header">
+          <div className="header-left">
+            <div className="brand-group">
+              <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
+                Movie &amp; TV Analytics
+              </button>
+            </div>
+          </div>
+          <div className="header-right">
+            <nav className="header-nav" aria-label="Primary navigation">
+              {primaryNav.map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={()=>navigateToTab(item.id)}
+                  aria-current={tab === item.id ? 'page' : undefined}
+                  className={`nav-pill ${tab === item.id ? 'active' : ''}`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+            <div className="header-actions">
+              {renderAccountControls()}
+            </div>
+          </div>
+        </header>
+
+        <section className="settings-layout" style={{display:'grid', gridTemplateColumns:'1fr 1.4fr', gap:'20px', alignItems:'start'}}>
+          <div className="card" style={{
+            padding:'24px',
+            background:'rgba(20, 20, 28, 0.95)',
+            border:'1px solid rgba(255, 255, 255, 0.08)',
+            borderRadius:'16px'
+          }}>
+            <div style={{display:'flex', alignItems:'center', gap:'14px', marginBottom:'20px'}}>
+              <div className="avatar-circle" style={{width:52, height:52}}>
+                <span className="avatar-initials">
+                  {settingsData?.display_name 
+                    ? settingsData.display_name.split(/\s+/).slice(0, 2).map(n => n.charAt(0).toUpperCase()).join('')
+                    : avatarInitials || '👤'}
+                </span>
+              </div>
+              <div>
+                <div style={{fontWeight:700, fontSize:'18px', color:'var(--text)'}}>
+                  {settingsData?.display_name || currentUser.user}
+                </div>
+                <div style={{color:'var(--muted)', fontSize:'13px', marginTop:'2px'}}>{settingsData?.email}</div>
+              </div>
+            </div>
+            <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px,1fr))', gap:'12px'}}>
+              <div style={{
+                padding:'14px',
+                border:'1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius:'10px',
+                background:'rgba(17, 17, 23, 0.6)'
+              }}>
+                <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px'}}>Account Type</div>
+                <div style={{fontWeight:600, marginTop:'4px', color:'var(--text)'}}>{settingsData?.is_admin ? 'Admin' : 'Regular'}</div>
+              </div>
+              {settingsData?.created_at && (
+                <div style={{
+                  padding:'14px',
+                  border:'1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius:'10px',
+                  background:'rgba(17, 17, 23, 0.6)'
+                }}>
+                  <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px'}}>Member Since</div>
+                  <div style={{fontWeight:600, marginTop:'4px', color:'var(--text)'}}>
+                    {new Date(settingsData.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="card" style={{
+            padding:'24px',
+            background:'rgba(20, 20, 28, 0.95)',
+            border:'1px solid rgba(255, 255, 255, 0.08)',
+            borderRadius:'16px'
+          }}>
+            <h2 className="form-title" style={{marginBottom:'8px', color:'var(--text)'}}>Account Settings</h2>
+            <p style={{color:'var(--muted)', marginBottom:'20px', fontSize:'14px'}}>Update your display name, email, or password. Current password is required.</p>
+
+            {settingsSuccess && (
+              <div style={{
+                background:'rgba(46, 125, 50, 0.15)',
+                border:'1px solid rgba(76, 175, 80, 0.3)',
+                color:'#81c784',
+                padding:'14px',
+                borderRadius:'8px',
+                marginBottom:'16px',
+                display:'flex',
+                alignItems:'center',
+                gap:'8px'
+              }}>
+                <span>✓</span>
+                <span>{settingsSuccess}</span>
+              </div>
+            )}
+
+            {settingsError && (
+              <div style={{
+                background:'rgba(198, 40, 40, 0.15)',
+                border:'1px solid rgba(244, 67, 54, 0.3)',
+                color:'#ef5350',
+                padding:'14px',
+                borderRadius:'8px',
+                marginBottom:'16px',
+                display:'flex',
+                alignItems:'center',
+                gap:'8px'
+              }}>
+                <span>⚠️</span>
+                <span>{settingsError}</span>
+              </div>
+            )}
+
+            <form className="auth-form" onSubmit={handleSettingsSubmit}>
+              <div className="form-group">
+                <label className="form-label">Current Password *</label>
+                <input 
+                  className="form-input" 
+                  type="password" 
+                  placeholder="Enter your current password" 
+                  value={settingsCurrentPassword} 
+                  onChange={e => setSettingsCurrentPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Display Name</label>
+                <input 
+                  className="form-input" 
+                  type="text" 
+                  placeholder={settingsData?.display_name || settingsData?.email?.split('@')[0] || 'Enter display name'}
+                  value={settingsDisplayName} 
+                  onChange={e => setSettingsDisplayName(e.target.value)}
+                  maxLength={50}
+                  autoComplete="name"
+                />
+                <div style={{fontSize:'12px', color:'var(--muted)', marginTop:'6px'}}>
+                  This is how your name appears throughout the app. Max 50 characters.
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">New Email</label>
+                <input 
+                  className="form-input" 
+                  type="email" 
+                  placeholder={settingsData?.email || 'Enter new email'}
+                  value={settingsNewEmail} 
+                  onChange={e => setSettingsNewEmail(e.target.value)}
+                  autoComplete="email"
+                />
+                <div style={{fontSize:'12px', color:'var(--muted)', marginTop:'6px'}}>
+                  Leave blank to keep your current email.
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">New Password</label>
+                <input 
+                  className="form-input" 
+                  type="password" 
+                  placeholder="Enter a new password (optional)" 
+                  value={settingsNewPassword} 
+                  onChange={e => setSettingsNewPassword(e.target.value)}
+                  autoComplete="new-password"
+                />
+                {settingsNewPassword && (
+                  <div style={{marginTop:'8px'}}>
+                    <div style={{height:'4px', background:'rgba(255, 255, 255, 0.1)', borderRadius:'2px', overflow:'hidden'}}>
+                      <div style={{width:`${(passwordStrength.score/4)*100}%`, height:'100%', background:passwordStrength.color, transition:'width 0.2s ease'}}></div>
+                    </div>
+                    <div style={{fontSize:'12px', color:passwordStrength.color, marginTop:'6px', fontWeight:500}}>
+                      {passwordStrength.label}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Confirm New Password</label>
+                <input 
+                  className="form-input" 
+                  type="password" 
+                  placeholder="Re-enter new password" 
+                  value={settingsConfirmPassword} 
+                  onChange={e => setSettingsConfirmPassword(e.target.value)}
+                  disabled={!settingsNewPassword}
+                  autoComplete="new-password"
+                  style={{background:!settingsNewPassword ? 'rgba(255, 255, 255, 0.03)' : 'transparent'}}
+                />
+                {settingsNewPassword && settingsConfirmPassword && (
+                  <div style={{
+                    fontSize:'12px',
+                    marginTop:'6px',
+                    color: settingsNewPassword === settingsConfirmPassword ? '#81c784' : '#ef5350',
+                    fontWeight:500
+                  }}>
+                    {settingsNewPassword === settingsConfirmPassword ? '✓ Passwords match' : '✗ Passwords do not match'}
+                  </div>
+                )}
+              </div>
+
+              <div style={{display:'flex', gap:'12px', marginTop:'16px'}}>
+                <button 
+                  className="btn-primary" 
+                  type="submit" 
+                  disabled={settingsSaving}
+                  style={{flex:1}}
+                >
+                  {settingsSaving ? 'Saving...' : 'Save Changes'}
+                </button>
+                <button 
+                  className="btn-secondary" 
+                  type="button" 
+                  onClick={() => navigateToView('app')}
+                  style={{flex:1}}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
       </div>
     )
   }
