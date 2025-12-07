@@ -415,6 +415,7 @@ export async function getUserSettings() {
 
 export type UpdateSettingsPayload = {
 	current_password: string
+	display_name?: string
 	new_email?: string
 	new_password?: string
 }
@@ -426,6 +427,115 @@ export async function updateUserSettings(payload: UpdateSettingsPayload) {
 	} catch (err: any) {
 		const errorData = err?.response?.data
 		const msg = errorData?.error || err?.message || 'Failed to update settings'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function deleteUserAccount(password: string) {
+	try {
+		const { data } = await api.delete('/user/account', { data: { password } })
+		return data as { ok: boolean; message?: string; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to delete account'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export type UserProfile = {
+	user: {
+		user_id: number
+		email: string
+		display_name?: string
+		created_at?: string
+	}
+	stats: {
+		movies: {
+			review_count: number
+			avg_rating: number
+			estimated_hours: number
+			discussion_count: number
+		}
+		tv: {
+			review_count: number
+			avg_rating: number
+			estimated_hours: number
+			discussion_count: number
+		}
+	}
+	favorites: {
+		movies: Array<{
+			title: string
+			media_type: 'movie'
+			rating: number
+			id?: number
+			poster_path?: string | null
+		}>
+		tv: Array<{
+			title: string
+			media_type: 'tv'
+			rating: number
+			id?: number
+			poster_path?: string | null
+		}>
+	}
+	watchlist: {
+		movies: Array<{
+			title: string
+			media_type: 'movie'
+			id?: number
+			added_at?: string
+			poster_path?: string | null
+		}>
+		tv: Array<{
+			title: string
+			media_type: 'tv'
+			id?: number
+			added_at?: string
+			poster_path?: string | null
+		}>
+	}
+}
+
+export async function getUserProfile() {
+	try {
+		const { data } = await api.get('/user/profile')
+		return data as { ok: true } & UserProfile | { ok: false; error: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to fetch profile'
+		return { ok: false, error: String(msg) } as { ok: false; error: string }
+	}
+}
+
+export async function addToWatchlist(userId: number, targetType: 'movie' | 'show', targetId: number) {
+	try {
+		const { data } = await api.post('/watchlist', {
+			user_id: userId,
+			target_type: targetType,
+			target_id: targetId
+		})
+		return data as { ok: boolean; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to add to watchlist'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function removeFromWatchlist(userId: number, targetType: 'movie' | 'show', targetId: number) {
+	try {
+		const { data } = await api.delete('/watchlist', {
+			data: {
+				user_id: userId,
+				target_type: targetType,
+				target_id: targetId
+			}
+		})
+		return data as { ok: boolean; deleted?: number; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to remove from watchlist'
 		return { ok: false, error: String(msg) }
 	}
 }

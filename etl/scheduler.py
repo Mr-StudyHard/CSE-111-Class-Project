@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from etl.tmdb_etl_service import TMDbETLService
 from etl.monitoring import ETLMonitor
+from etl.kpi_service import KPIService
 
 
 class ETLScheduler:
@@ -40,6 +41,7 @@ class ETLScheduler:
             timezone=self.config['schedule'].get('timezone', 'UTC')
         )
         self.etl_service: Optional[TMDbETLService] = None
+        self.kpi_service: Optional[KPIService] = None
         self.last_run_time: Optional[datetime] = None
         self.last_run_status: str = "Never run"
         self.run_count: int = 0
@@ -134,6 +136,17 @@ class ETLScheduler:
             # Record metrics
             if self.monitor and monitor_run_id:
                 self.monitor.end_run(monitor_run_id, stats, status='success')
+            
+            # Run KPI computation if enabled
+            if self.config.get('kpi', {}).get('enabled', True):
+                self.logger.info("Running KPI precomputation...")
+                try:
+                    if self.kpi_service is None:
+                        self.kpi_service = KPIService(self.config)
+                    kpi_stats = self.kpi_service.run_kpi_computation()
+                    self.logger.info(f"KPI computation completed: {kpi_stats}")
+                except Exception as kpi_error:
+                    self.logger.error(f"KPI computation failed: {kpi_error}")
             
             # Optional: Run cleanup/optimization
             if self.config.get('database', {}).get('vacuum_on_completion', False):

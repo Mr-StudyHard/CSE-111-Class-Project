@@ -77,6 +77,11 @@ database:
   # Run VACUUM periodically to optimize database
   vacuum_on_completion: false
 
+# KPI Precomputation
+kpi:
+  # Enable automatic KPI computation after each ETL run
+  enabled: true
+
 # Monitoring & Alerts
 monitoring:
   # Track ETL metrics
