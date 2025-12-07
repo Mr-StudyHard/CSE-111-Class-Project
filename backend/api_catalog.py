@@ -248,9 +248,8 @@ def _ensure_auth_bootstrap() -> None:
             password_hash = CASE
                 WHEN password_hash IS NULL THEN ?
                 ELSE password_hash
-            END,
-            is_admin = COALESCE(is_admin, 0)
-        WHERE password_plain IS NULL OR password_hash IS NULL OR is_admin IS NULL
+            END
+        WHERE password_plain IS NULL OR password_hash IS NULL
         """,
         (fallback_plain, fallback_hash),
     )
@@ -278,22 +277,18 @@ def health():
 def list_users():
     """
     Return a lightweight view of demo accounts for the admin UI.
-    ADMIN ONLY: Requires admin privileges to access.
+    Requires admin privileges.
 
     The legacy frontend expects `user`, `email`, and `password` fields.
     The new schema only stores email addresses, so we derive a friendly
     display name from the prefix and return a placeholder password.
     """
     _ensure_auth_bootstrap()
-    
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
+    _require_admin()  # Admin only
     
     rows = query(
         """
-        SELECT user_id, email, password_plain, password_hash, created_at, is_admin
+        SELECT user_id, email, password_plain, password_hash, created_at
         FROM users
         ORDER BY user_id
         """
@@ -314,7 +309,6 @@ def list_users():
                 "user_id": row_dict.get("user_id"),
                 "password": password_value,
                 "created_at": row_dict.get("created_at"),
-                "is_admin": bool(row_dict.get("is_admin", 0)),
             }
         )
     return jsonify(results)
@@ -345,6 +339,459 @@ def get_user_by_email():
     
     row = dict(rows[0])
     return jsonify({"ok": True, "user_id": row["user_id"], "email": row["email"]})
+
+
+def _get_current_user() -> dict | None:
+    """
+    Extract and validate the current user from the request.
+    Expects Authorization header with format: "Bearer user_id:email"
+    Returns user dict with user_id, email, and is_admin, or None if not authenticated.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    
+    try:
+        token = auth_header[7:]  # Remove "Bearer " prefix
+        user_id_str, email = token.split(":", 1)
+        user_id = int(user_id_str)
+        
+        rows = query(
+            "SELECT user_id, email, is_admin FROM users WHERE user_id = ? AND lower(email) = lower(?)",
+            (user_id, email),
+        )
+        if rows:
+            row = dict(rows[0])
+            return {
+                "user_id": row["user_id"],
+                "email": row["email"],
+                "is_admin": bool(row.get("is_admin", 0)),
+            }
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+def _require_admin() -> dict:
+    """
+    Require that the current user is authenticated and is an admin.
+    Returns the user dict if admin, otherwise raises an abort with 403.
+    """
+    user = _get_current_user()
+    if not user:
+        from flask import abort
+        abort(401, description="Authentication required")
+    if not user.get("is_admin"):
+        from flask import abort
+        abort(403, description="Admin privileges required")
+    return user
+
+
+@app.get("/api/user/settings")
+def get_user_settings():
+    """
+    Get current user's settings.
+    Requires authentication via Authorization header.
+    """
+    try:
+        _ensure_auth_bootstrap()  # Ensure is_admin column exists
+        user = _get_current_user()
+        if not user:
+            return jsonify({"ok": False, "error": "Authentication required"}), 401
+        
+        rows = query(
+            """
+            SELECT user_id, email, created_at, is_admin
+            FROM users
+            WHERE user_id = ?
+            LIMIT 1
+            """,
+            (user["user_id"],),
+        )
+        
+        if not rows:
+            return jsonify({"ok": False, "error": "User not found"}), 404
+        
+        row = dict(rows[0])
+        # Derive display_name from email (since display_name column was removed)
+        display_name = row.get("email", "").split("@", 1)[0] if "@" in row.get("email", "") else row.get("email", "")
+        
+        return jsonify({
+            "ok": True,
+            "user_id": row["user_id"],
+            "email": row["email"],
+            "display_name": display_name,
+            "created_at": row.get("created_at"),
+            "is_admin": bool(row.get("is_admin", 0))
+        })
+    except Exception as exc:
+        import traceback
+        print(f"Error in get_user_settings: {traceback.format_exc()}")
+        return jsonify({"ok": False, "error": f"Server error: {str(exc)}"}), 500
+
+
+@app.put("/api/user/settings")
+def update_user_settings():
+    """
+    Update current user's settings (email and/or password).
+    Requires authentication via Authorization header.
+    
+    Expected JSON:
+      {
+        "current_password": "current",  # required for verification
+        "display_name": "John Doe",    # optional (ignored - column doesn't exist)
+        "new_email": "new@email.com",   # optional
+        "new_password": "newpassword"    # optional
+      }
+    """
+    _ensure_auth_bootstrap()  # Ensure is_admin column exists
+    user = _get_current_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    payload = request.get_json(silent=True) or {}
+    current_password = (payload.get("current_password") or "").strip()
+    display_name = (payload.get("display_name") or "").strip()  # Accept but ignore (column removed)
+    new_email = (payload.get("new_email") or "").strip()
+    new_password = (payload.get("new_password") or "").strip()
+    
+    if not current_password:
+        return jsonify({"ok": False, "error": "Current password is required"}), 400
+    
+    if not new_email and not new_password:
+        # display_name is ignored, so don't count it as a change
+        return jsonify({"ok": False, "error": "No changes specified"}), 400
+    
+    conn = get_db()
+    
+    # Verify current password
+    rows = query(
+        "SELECT user_id, password_hash, password_plain FROM users WHERE user_id = ?",
+        (user["user_id"],),
+    )
+    
+    if not rows:
+        return jsonify({"ok": False, "error": "User not found"}), 404
+    
+    user_row = dict(rows[0])
+    stored_hash = user_row.get("password_hash")
+    stored_plain = user_row.get("password_plain")
+    
+    # Verify current password
+    verified = False
+    if stored_hash:
+        try:
+            verified = check_password_hash(stored_hash, current_password)
+        except ValueError:
+            verified = False
+    if not verified and stored_plain is not None:
+        verified = stored_plain == current_password
+    
+    if not verified:
+        return jsonify({"ok": False, "error": "Current password is incorrect"}), 401
+    
+    try:
+        updates = []
+        params = []
+        
+        # Update email if provided
+        if new_email:
+            # Check if email already exists for another user
+            existing = conn.execute(
+                "SELECT user_id FROM users WHERE lower(email) = lower(?) AND user_id != ?",
+                (new_email, user["user_id"]),
+            ).fetchone()
+            
+            if existing:
+                return jsonify({"ok": False, "error": "Email already in use"}), 409
+            
+            updates.append("email = ?")
+            params.append(new_email)
+        
+        # Update password if provided
+        if new_password:
+            new_hash = generate_password_hash(new_password)
+            updates.append("password_hash = ?")
+            params.append(new_hash)
+            updates.append("password_plain = ?")
+            params.append(new_password)
+        
+        if updates:
+            params.append(user["user_id"])
+            sql = f"UPDATE users SET {', '.join(updates)} WHERE user_id = ?"
+            conn.execute(sql, tuple(params))
+            conn.commit()
+        
+        return jsonify({"ok": True, "message": "Settings updated successfully"})
+    
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return jsonify({"ok": False, "error": "Email already in use"}), 409
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": f"Failed to update settings: {str(exc)}"}), 500
+
+
+@app.get("/api/user/profile")
+def get_user_profile():
+    """
+    Get current user's profile summary, stats, favorites, and watchlist.
+    Requires authentication via Authorization header.
+    """
+    try:
+        _ensure_auth_bootstrap()
+        user = _get_current_user()
+        if not user:
+            return jsonify({"ok": False, "error": "Authentication required"}), 401
+
+        # Basic user info
+        rows = query(
+            """
+            SELECT user_id, email, created_at
+            FROM users
+            WHERE user_id = ?
+            LIMIT 1
+            """,
+            (user["user_id"],),
+        )
+        if not rows:
+            return jsonify({"ok": False, "error": "User not found"}), 404
+        info = dict(rows[0])
+        display_name = info.get("email", "").split("@", 1)[0] if "@" in info.get("email", "") else info.get("email", "")
+
+        # Stats: separate movie and TV statistics
+        # Movie stats
+        movie_stats_rows = query(
+            """
+            SELECT COUNT(*) AS review_count, AVG(rating) AS avg_rating
+            FROM reviews
+            WHERE user_id = ? AND movie_id IS NOT NULL
+            """,
+            (user["user_id"],),
+        )
+        movie_review_count = int(movie_stats_rows[0]["review_count"] or 0) if movie_stats_rows else 0
+        movie_avg_rating = float(movie_stats_rows[0]["avg_rating"] or 0) if movie_stats_rows else 0.0
+        # Assume ~2 hours per movie
+        movie_hours = movie_review_count * 2
+        
+        # Movie discussion count
+        movie_discussion_rows = query(
+            """
+            SELECT COUNT(*) AS discussion_count
+            FROM discussions
+            WHERE user_id = ? AND movie_id IS NOT NULL
+            """,
+            (user["user_id"],),
+        )
+        movie_discussion_count = int(movie_discussion_rows[0]["discussion_count"] or 0) if movie_discussion_rows else 0
+
+        # TV stats
+        tv_stats_rows = query(
+            """
+            SELECT COUNT(*) AS review_count, AVG(rating) AS avg_rating
+            FROM reviews
+            WHERE user_id = ? AND show_id IS NOT NULL
+            """,
+            (user["user_id"],),
+        )
+        tv_review_count = int(tv_stats_rows[0]["review_count"] or 0) if tv_stats_rows else 0
+        tv_avg_rating = float(tv_stats_rows[0]["avg_rating"] or 0) if tv_stats_rows else 0.0
+        # Assume ~2 hours per TV show episode (or per review)
+        tv_hours = tv_review_count * 2
+        
+        # TV discussion count
+        tv_discussion_rows = query(
+            """
+            SELECT COUNT(*) AS discussion_count
+            FROM discussions
+            WHERE user_id = ? AND show_id IS NOT NULL
+            """,
+            (user["user_id"],),
+        )
+        tv_discussion_count = int(tv_discussion_rows[0]["discussion_count"] or 0) if tv_discussion_rows else 0
+
+        # Favorites: top 5 rated items by this user with poster images
+        favorite_rows = query(
+            """
+            SELECT 
+                r.rating,
+                r.movie_id,
+                r.show_id,
+                m.title AS movie_title,
+                m.poster_path AS movie_poster,
+                s.title AS show_title,
+                s.poster_path AS show_poster
+            FROM reviews r
+            LEFT JOIN movies m ON r.movie_id = m.movie_id
+            LEFT JOIN shows s ON r.show_id = s.show_id
+            WHERE r.user_id = ? AND r.rating IS NOT NULL
+            ORDER BY r.rating DESC, r.created_at DESC
+            LIMIT 5
+            """,
+            (user["user_id"],),
+        )
+        favorites: list[dict[str, object]] = []
+        for row in favorite_rows:
+            data = dict(row)
+            title = data.get("movie_title") or data.get("show_title") or "Untitled"
+            poster_path = data.get("movie_poster") or data.get("show_poster")
+            media_type = "movie" if data.get("movie_id") is not None else "tv"
+            favorites.append(
+                {
+                    "title": title,
+                    "media_type": media_type,
+                    "rating": float(data.get("rating") or 0),
+                    "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
+                    "poster_path": poster_path,
+                }
+            )
+
+        # Watchlist items with poster images
+        watchlist_rows = query(
+            """
+            SELECT
+                w.user_id,
+                w.movie_id,
+                w.show_id,
+                w.added_at,
+                m.title AS movie_title,
+                m.poster_path AS movie_poster,
+                s.title AS show_title,
+                s.poster_path AS show_poster
+            FROM watchlists w
+            LEFT JOIN movies m ON w.movie_id = m.movie_id
+            LEFT JOIN shows s ON w.show_id = s.show_id
+            WHERE w.user_id = ?
+            ORDER BY w.added_at DESC
+            """,
+            (user["user_id"],),
+        )
+        watchlist: list[dict[str, object]] = []
+        for row in watchlist_rows:
+            data = dict(row)
+            title = data.get("movie_title") or data.get("show_title") or "Untitled"
+            poster_path = data.get("movie_poster") or data.get("show_poster")
+            media_type = "movie" if data.get("movie_id") is not None else "tv"
+            watchlist.append(
+                {
+                    "title": title,
+                    "media_type": media_type,
+                    "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
+                    "added_at": data.get("added_at"),
+                    "poster_path": poster_path,
+                }
+            )
+
+        # Separate favorites and watchlist by type
+        movie_favorites = [f for f in favorites if f["media_type"] == "movie"]
+        tv_favorites = [f for f in favorites if f["media_type"] == "tv"]
+        movie_watchlist = [w for w in watchlist if w["media_type"] == "movie"]
+        tv_watchlist = [w for w in watchlist if w["media_type"] == "tv"]
+
+        return jsonify(
+            {
+                "ok": True,
+                "user": {
+                    "user_id": info.get("user_id"),
+                    "email": info.get("email"),
+                    "display_name": display_name,
+                    "created_at": info.get("created_at"),
+                },
+                "stats": {
+                    "movies": {
+                        "review_count": movie_review_count,
+                        "avg_rating": movie_avg_rating,
+                        "estimated_hours": movie_hours,
+                        "discussion_count": movie_discussion_count,
+                    },
+                    "tv": {
+                        "review_count": tv_review_count,
+                        "avg_rating": tv_avg_rating,
+                        "estimated_hours": tv_hours,
+                        "discussion_count": tv_discussion_count,
+                    },
+                },
+                "favorites": {
+                    "movies": movie_favorites,
+                    "tv": tv_favorites,
+                },
+                "watchlist": {
+                    "movies": movie_watchlist,
+                    "tv": tv_watchlist,
+                },
+            }
+        )
+    except Exception as exc:
+        import traceback
+        print(f"Error in get_user_profile: {traceback.format_exc()}")
+        return jsonify({"ok": False, "error": f"Server error: {str(exc)}"}), 500
+
+
+@app.delete("/api/user/account")
+def delete_user_account():
+    """
+    Delete the current user's account and all associated data.
+    Requires authentication via Authorization header and password confirmation.
+    
+    Expected JSON:
+      {
+        "password": "user_password"  # required for confirmation
+      }
+    """
+    try:
+        _ensure_auth_bootstrap()
+        user = _get_current_user()
+        if not user:
+            return jsonify({"ok": False, "error": "Authentication required"}), 401
+        
+        payload = request.get_json(silent=True) or {}
+        password = (payload.get("password") or "").strip()
+        
+        if not password:
+            return jsonify({"ok": False, "error": "Password is required for account deletion"}), 400
+        
+        conn = get_db()
+        
+        # Verify password
+        rows = query(
+            "SELECT user_id, password_hash, password_plain FROM users WHERE user_id = ?",
+            (user["user_id"],),
+        )
+        
+        if not rows:
+            return jsonify({"ok": False, "error": "User not found"}), 404
+        
+        user_row = dict(rows[0])
+        stored_hash = user_row.get("password_hash")
+        stored_plain = user_row.get("password_plain")
+        
+        # Verify password
+        verified = False
+        if stored_hash:
+            try:
+                verified = check_password_hash(stored_hash, password)
+            except ValueError:
+                verified = False
+        if not verified and stored_plain is not None:
+            verified = stored_plain == password
+        
+        if not verified:
+            return jsonify({"ok": False, "error": "Password is incorrect"}), 401
+        
+        # Delete user account (CASCADE will handle related data: reviews, watchlists, discussions, comments)
+        # Foreign key constraints with ON DELETE CASCADE will automatically delete:
+        # - reviews (user_id)
+        # - watchlists (user_id)
+        # - discussions (user_id) -> which will cascade delete comments
+        conn.execute("DELETE FROM users WHERE user_id = ?", (user["user_id"],))
+        conn.commit()
+        
+        return jsonify({"ok": True, "message": "Account deleted successfully"})
+    except Exception as exc:
+        import traceback
+        print(f"Error in delete_user_account: {traceback.format_exc()}")
+        conn.rollback()
+        return jsonify({"ok": False, "error": f"Server error: {str(exc)}"}), 500
 
 
 @app.post("/api/signup")
@@ -387,50 +834,6 @@ def signup():
     return jsonify({"ok": True, "user": display_name, "email": email})
 
 
-def _get_current_user() -> dict | None:
-    """
-    Extract and validate the current user from the request.
-    Expects Authorization header with format: "Bearer user_id:email"
-    Returns user dict with is_admin flag, or None if not authenticated.
-    """
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        return None
-    
-    try:
-        token = auth_header[7:]  # Remove "Bearer " prefix
-        user_id_str, email = token.split(":", 1)
-        user_id = int(user_id_str)
-        
-        rows = query(
-            "SELECT user_id, email, is_admin FROM users WHERE user_id = ? AND lower(email) = lower(?)",
-            (user_id, email),
-        )
-        if rows:
-            row = dict(rows[0])
-            return {
-                "user_id": row["user_id"],
-                "email": row["email"],
-                "is_admin": bool(row.get("is_admin", 0)),
-            }
-    except (ValueError, IndexError):
-        pass
-    return None
-
-
-def _require_admin():
-    """
-    Check if the current request is from an admin user.
-    Returns (None, None) if admin, otherwise returns (error_response, status_code).
-    """
-    user = _get_current_user()
-    if not user:
-        return jsonify({"ok": False, "error": "Authentication required"}), 401
-    if not user.get("is_admin"):
-        return jsonify({"ok": False, "error": "Admin privileges required"}), 403
-    return None, None
-
-
 @app.post("/api/login")
 def login_route():
     _ensure_auth_bootstrap()
@@ -470,13 +873,12 @@ def login_route():
         return jsonify({"ok": False, "error": "Invalid credentials"}), 401
 
     display_name = email.split("@", 1)[0] if "@" in email else email
-    is_admin = bool(record.get("is_admin", 0))
     return jsonify({
-        "ok": True, 
-        "user": display_name, 
-        "email": record["email"], 
+        "ok": True,
+        "user": display_name,
+        "email": record["email"],
         "user_id": record["user_id"],
-        "is_admin": is_admin
+        "is_admin": bool(record.get("is_admin", 0))
     })
 
 
@@ -577,6 +979,108 @@ def summary():
     return jsonify(_summary_payload())
 
 
+@app.get("/api/kpis")
+def get_precomputed_kpis():
+    """
+    Get precomputed KPIs for analytics dashboards.
+    Optional query param: category (user_activity, review_trends, title_stats, genre_stats, platform_stats)
+    """
+    category = request.args.get("category")
+    
+    try:
+        if category:
+            rows = query(
+                """
+                SELECT category, kpi_name, kpi_value, computed_at
+                FROM precomputed_kpis
+                WHERE category = ?
+                ORDER BY kpi_name
+                """,
+                (category,)
+            )
+        else:
+            rows = query(
+                """
+                SELECT category, kpi_name, kpi_value, computed_at
+                FROM precomputed_kpis
+                ORDER BY category, kpi_name
+                """
+            )
+        
+        result = {}
+        for row in rows:
+            cat = row["category"]
+            if cat not in result:
+                result[cat] = {}
+            
+            # Parse JSON values
+            import json
+            try:
+                value = json.loads(row["kpi_value"])
+            except (json.JSONDecodeError, TypeError):
+                value = row["kpi_value"]
+            
+            result[cat][row["kpi_name"]] = {
+                "value": value,
+                "computed_at": row["computed_at"]
+            }
+        
+        return jsonify({
+            "ok": True,
+            "kpis": result
+        })
+    except Exception as e:
+        # Table might not exist yet
+        return jsonify({
+            "ok": True,
+            "kpis": {},
+            "message": "No precomputed KPIs available yet. Run the ETL scheduler to generate them."
+        })
+
+
+@app.post("/api/kpis/refresh")
+def refresh_kpis():
+    """
+    Manually trigger KPI recomputation.
+    Requires admin privileges.
+    """
+    _ensure_auth_bootstrap()
+    _require_admin()
+    
+    try:
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        
+        from etl.kpi_service import KPIService
+        import yaml
+        
+        # Load config
+        config_path = Path(__file__).parent.parent / "etl_config.yaml"
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+        else:
+            config = {}
+        
+        # Run KPI computation
+        kpi_service = KPIService(config)
+        stats = kpi_service.run_kpi_computation()
+        
+        return jsonify({
+            "ok": True,
+            "message": "KPI refresh completed",
+            "stats": stats
+        })
+    except Exception as e:
+        import traceback
+        print(f"KPI refresh error: {traceback.format_exc()}")
+        return jsonify({
+            "ok": False,
+            "error": f"KPI refresh failed: {str(e)}"
+        }), 500
+
+
 @app.get("/api/genres")
 def get_genres():
     """Get all available genres"""
@@ -616,7 +1120,7 @@ def movies_list():
 def create_movie():
     """
     Create a new movie record plus at least one genre association.
-    ADMIN ONLY: Requires admin privileges.
+    Requires admin privileges.
 
     This is used by the admin "Add Movie/TV" UI and expects JSON in the form:
       {
@@ -630,11 +1134,6 @@ def create_movie():
         "genre": "Drama"            # required, creates if missing
       }
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     payload = request.get_json(silent=True) or {}
     title = (payload.get("title") or "").strip()
     if not title:
@@ -718,7 +1217,6 @@ def shows_list():
 def create_show():
     """
     Create a new TV show record plus at least one genre association.
-    ADMIN ONLY: Requires admin privileges.
 
     Expected JSON is analogous to create_movie, but the date field is:
       {
@@ -732,10 +1230,8 @@ def create_show():
         "genre": "Drama"
       }
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
+    _ensure_auth_bootstrap()
+    _require_admin()  # Admin only
     
     payload = request.get_json(silent=True) or {}
     title = (payload.get("title") or "").strip()
@@ -1175,14 +1671,8 @@ def show_detail(show_id: int):
 def delete_movie(movie_id: int):
     """
     Delete a movie and its associated data (genres, reviews, etc.).
-    ADMIN ONLY: Requires admin privileges.
     Also deletes the associated image file if it exists.
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     conn = get_db()
     try:
         # First check if movie exists
@@ -1232,7 +1722,7 @@ def delete_movie(movie_id: int):
 def update_movie(movie_id: int):
     """
     Update an existing movie record.
-    ADMIN ONLY: Requires admin privileges.
+    Requires admin privileges.
     
     Expected JSON payload (all fields optional except title if provided):
       {
@@ -1246,10 +1736,8 @@ def update_movie(movie_id: int):
         "genre": "Drama"
       }
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
+    _ensure_auth_bootstrap()
+    _require_admin()  # Admin only
     
     conn = get_db()
     try:
@@ -1360,7 +1848,7 @@ def update_movie(movie_id: int):
 def update_show(show_id: int):
     """
     Update an existing TV show record.
-    ADMIN ONLY: Requires admin privileges.
+    Requires admin privileges.
     
     Expected JSON payload (all fields optional except title if provided):
       {
@@ -1374,10 +1862,8 @@ def update_show(show_id: int):
         "genre": "Drama"
       }
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
+    _ensure_auth_bootstrap()
+    _require_admin()  # Admin only
     
     conn = get_db()
     try:
@@ -1489,13 +1975,11 @@ def update_show(show_id: int):
 def delete_show(show_id: int):
     """
     Delete a TV show and its associated data (genres, reviews, seasons, episodes, etc.).
-    ADMIN ONLY: Requires admin privileges.
     Also deletes the associated image file if it exists.
+    Requires admin privileges.
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
+    _ensure_auth_bootstrap()
+    _require_admin()  # Admin only
     
     conn = get_db()
     try:
@@ -1538,7 +2022,7 @@ def delete_show(show_id: int):
         error_msg = str(exc)
         # Log full traceback for debugging
         import traceback
-        print(f"Error deleting show {show_id}: {traceback.format_exc()}")
+        print(f"Error deleting movie {movie_id}: {traceback.format_exc()}")
         return jsonify({"ok": False, "error": error_msg}), 500
 
 
@@ -1887,14 +2371,8 @@ def _allowed_file(filename: str) -> bool:
 def upload_image():
     """
     Upload an image file and save it to the imageofmovie folder.
-    ADMIN ONLY: Requires admin privileges.
     Returns the relative path that can be stored in the database.
     """
-    # Check admin privileges
-    error_response, status_code = _require_admin()
-    if error_response:
-        return error_response, status_code
-    
     if "file" not in request.files:
         return jsonify({"ok": False, "error": "No file provided"}), 400
     

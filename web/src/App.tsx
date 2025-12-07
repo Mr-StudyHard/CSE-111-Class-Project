@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, type Review, getUserByEmail, setAuthToken, clearAuthToken } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, type Review, getUserByEmail, setAuthToken, clearAuthToken, getUserSettings, updateUserSettings, type UserSettings, getUserProfile, type UserProfile, deleteUserAccount, addToWatchlist, removeFromWatchlist } from './api'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
 type ReleaseFilter = 'all' | 'movie' | 'tv'
 
@@ -129,6 +129,8 @@ export default function App() {
     if (path === '/login') return 'login'
     if (path === '/signup') return 'signup'
     if (path === '/accounts') return 'accounts'
+    if (path === '/profile') return 'profile'
+    if (path === '/settings') return 'settings'
     if (path === '/add') return 'add'
     if (path.startsWith('/movie/') || path.startsWith('/show/')) return 'detail'
     return 'app'
@@ -199,7 +201,7 @@ export default function App() {
   const [newReleaseTransitionType, setNewReleaseTransitionType] = useState<'fade' | 'slide' | 'none'>('none')
   const newReleasesRequestId = useRef(0)
   // Remember-me support: if a profile was stored and flag set, restore it.
-  const [currentUser, setCurrentUser] = useState<{user:string;email:string;user_id?:number;is_admin?:boolean}|null>(() => {
+  const [currentUser, setCurrentUser] = useState<{user:string;email:string;user_id?:number;display_name?:string;is_admin?:boolean}|null>(() => {
     try {
       const rawSession = sessionStorage.getItem('currentUser')
       if(rawSession){
@@ -251,6 +253,8 @@ export default function App() {
   const [reviewsLoading, setReviewsLoading] = useState(false)
   const [reviewText, setReviewText] = useState('')
   const [reviewSubmitting, setReviewSubmitting] = useState(false)
+  const [isInWatchlist, setIsInWatchlist] = useState(false)
+  const [watchlistLoading, setWatchlistLoading] = useState(false)
   const [moviesAnimationKey, setMoviesAnimationKey] = useState(0)
   const [tvAnimationKey, setTvAnimationKey] = useState(0)
   const moviesRequestId = useRef(0)
@@ -279,6 +283,35 @@ export default function App() {
   const [addPosterPreview, setAddPosterPreview] = useState<string | null>(null)
   const [addPosterFile, setAddPosterFile] = useState<File | null>(null)
   const addPosterInputRef = useRef<HTMLInputElement | null>(null)
+  const [settingsData, setSettingsData] = useState<UserSettings | null>(null)
+  const [settingsLoading, setSettingsLoading] = useState(false)
+  const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [settingsCurrentPassword, setSettingsCurrentPassword] = useState('')
+  const [settingsDisplayName, setSettingsDisplayName] = useState('')
+  const [settingsNewEmail, setSettingsNewEmail] = useState('')
+  const [settingsNewPassword, setSettingsNewPassword] = useState('')
+  const [settingsConfirmPassword, setSettingsConfirmPassword] = useState('')
+  const [settingsSaving, setSettingsSaving] = useState(false)
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null)
+  const [deleteAccountPassword, setDeleteAccountPassword] = useState('')
+  const [deleteAccountConfirm, setDeleteAccountConfirm] = useState('')
+  const [deleteAccountDeleting, setDeleteAccountDeleting] = useState(false)
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [profileData, setProfileData] = useState<UserProfile | null>(null)
+  const [profileLoading, setProfileLoading] = useState(false)
+  const [profileError, setProfileError] = useState<string | null>(null)
+  // Favorites carousel state
+  const [movieFavPage, setMovieFavPage] = useState(0)
+  const [movieFavSlideDirection, setMovieFavSlideDirection] = useState<'left' | 'right' | 'none'>('none')
+  const [movieFavTransitionType, setMovieFavTransitionType] = useState<'slide' | 'none'>('none')
+  const [tvFavPage, setTvFavPage] = useState(0)
+  const [tvFavSlideDirection, setTvFavSlideDirection] = useState<'left' | 'right' | 'none'>('none')
+  const [tvFavTransitionType, setTvFavTransitionType] = useState<'slide' | 'none'>('none')
+  const FAVORITES_PAGE_SIZE = 6
+  // Watchlist expand/collapse state
+  const [movieWatchlistExpanded, setMovieWatchlistExpanded] = useState(false)
+  const [tvWatchlistExpanded, setTvWatchlistExpanded] = useState(false)
   const primaryNav = [
     { id: 'analytics', label: 'Analytics' },
     { id: 'movies', label: 'Movies' },
@@ -391,12 +424,12 @@ export default function App() {
   }
 
   const avatarInitials = useMemo(() => {
-    const name = currentUser?.user ?? ''
+    const name = currentUser?.display_name || currentUser?.user || ''
     if(!name.trim()) return ''
     const parts = name.trim().split(/\s+/).slice(0, 2)
     const letters = parts.map(part => part.charAt(0)?.toUpperCase() ?? '').join('')
     return letters || ''
-  }, [currentUser?.user])
+  }, [currentUser?.display_name, currentUser?.user])
 
   const renderAccountControls = () => {
     if(!currentUser){
@@ -410,7 +443,7 @@ export default function App() {
         </button>
       )
     }
-    const displayName = currentUser.user?.trim() || 'Signed in'
+    const displayName = currentUser.display_name || currentUser.user?.trim() || 'Signed in'
     const displayEmail = currentUser.email || ''
     return (
       <div className={`header-account${accountMenuOpen ? ' open' : ''}`} ref={accountMenuRef}>
@@ -451,18 +484,34 @@ export default function App() {
               <span className="account-menu-name">{displayName}</span>
               <span className="account-menu-email">{displayEmail}</span>
             </div>
-            <button type="button" className="account-menu-item" role="menuitem" disabled>
+            <button
+              type="button"
+              className="account-menu-item"
+              role="menuitem"
+              onClick={() => {
+                setAccountMenuOpen(false)
+                navigateToView('profile')
+              }}
+            >
               <span className="menu-icon" aria-hidden="true">👤</span>
               <span className="menu-content">
                 <span className="menu-title">Profile</span>
-                <span className="menu-subtitle">Coming soon</span>
+                <span className="menu-subtitle">View your stats & watchlist</span>
               </span>
             </button>
-            <button type="button" className="account-menu-item" role="menuitem" disabled>
+            <button
+              type="button"
+              className="account-menu-item"
+              role="menuitem"
+              onClick={() => {
+                setAccountMenuOpen(false)
+                navigateToView('settings')
+              }}
+            >
               <span className="menu-icon" aria-hidden="true">⚙️</span>
               <span className="menu-content">
                 <span className="menu-title">User Settings</span>
-                <span className="menu-subtitle">Coming soon</span>
+                <span className="menu-subtitle">Change password & email</span>
               </span>
             </button>
             {currentUser?.is_admin && (
@@ -515,6 +564,33 @@ export default function App() {
       setPassword('')
     }
   }, [view])
+
+  // Load user profile when profile view is opened
+  useEffect(() => {
+    if(view === 'profile' || (view === 'detail' && currentUser)){
+      (async () => {
+        setProfileLoading(true)
+        setProfileError(null)
+        try {
+          const result = await getUserProfile()
+          if(result.ok){
+            setProfileData(result as UserProfile)
+          } else {
+            setProfileError(result.error || 'Failed to load profile')
+          }
+        } catch (e:any) {
+          setProfileError(e?.message || 'Failed to load profile')
+        } finally {
+          setProfileLoading(false)
+        }
+      })()
+    } else if(view !== 'detail') {
+      // Only clear profile data if not on detail page
+      setProfileData(null)
+      setProfileError(null)
+      setProfileLoading(false)
+    }
+  }, [view, currentUser])
 
   useEffect(() => {
     if(!mobileSearchOpen) return
@@ -806,6 +882,60 @@ export default function App() {
       return () => clearTimeout(timer)
     }
   }, [tvSlideDirection])
+
+  // Reset favorites carousel slide directions
+  useEffect(() => {
+    if (movieFavSlideDirection !== 'none') {
+      const timer = setTimeout(() => {
+        setMovieFavSlideDirection('none')
+        setMovieFavTransitionType('none')
+      }, 400)
+      return () => clearTimeout(timer)
+    }
+  }, [movieFavSlideDirection])
+
+  useEffect(() => {
+    if (tvFavSlideDirection !== 'none') {
+      const timer = setTimeout(() => {
+        setTvFavSlideDirection('none')
+        setTvFavTransitionType('none')
+      }, 400)
+      return () => clearTimeout(timer)
+    }
+  }, [tvFavSlideDirection])
+
+
+  // Calculate carousel pages for favorites (always call hooks, even if not in profile view)
+  const movieFavorites = profileData?.favorites?.movies || []
+  const tvFavorites = profileData?.favorites?.tv || []
+  const movieWatchlist = profileData?.watchlist?.movies || []
+  const tvWatchlist = profileData?.watchlist?.tv || []
+  const movieFavTotalPages = useMemo(() => {
+    if(movieFavorites.length === 0) return 0
+    return Math.ceil(movieFavorites.length / FAVORITES_PAGE_SIZE)
+  }, [movieFavorites.length])
+
+  const displayedMovieFavorites = useMemo(() => {
+    if(movieFavorites.length === 0) return []
+    const clampedPage = Math.min(movieFavPage, Math.max(0, movieFavTotalPages - 1))
+    const start = clampedPage * FAVORITES_PAGE_SIZE
+    const end = start + FAVORITES_PAGE_SIZE
+    return movieFavorites.slice(start, end)
+  }, [movieFavorites, movieFavPage, movieFavTotalPages])
+
+  const tvFavTotalPages = useMemo(() => {
+    if(tvFavorites.length === 0) return 0
+    return Math.ceil(tvFavorites.length / FAVORITES_PAGE_SIZE)
+  }, [tvFavorites.length])
+
+  const displayedTvFavorites = useMemo(() => {
+    if(tvFavorites.length === 0) return []
+    const clampedPage = Math.min(tvFavPage, Math.max(0, tvFavTotalPages - 1))
+    const start = clampedPage * FAVORITES_PAGE_SIZE
+    const end = start + FAVORITES_PAGE_SIZE
+    return tvFavorites.slice(start, end)
+  }, [tvFavorites, tvFavPage, tvFavTotalPages])
+
 
   // Reset fade state and transition type after fade completes
   useEffect(() => {
@@ -1269,6 +1399,46 @@ export default function App() {
     }
   }, [view])
 
+  // Load user settings when settings view is opened
+  useEffect(() => {
+    if(view === 'settings'){
+      (async () => {
+        setSettingsLoading(true)
+        setSettingsError(null)
+        setSettingsSuccess(null)
+        try {
+          const result = await getUserSettings()
+          if(result.ok){
+            setSettingsData({
+              user_id: result.user_id,
+              email: result.email,
+              display_name: result.display_name,
+              created_at: result.created_at,
+              is_admin: result.is_admin
+            })
+            setSettingsDisplayName(result.display_name || result.email.split('@')[0] || '')
+            setSettingsNewEmail(result.email)
+          } else {
+            setSettingsError(result.error || 'Failed to load settings')
+          }
+        } catch (e: any) {
+          setSettingsError(e?.message || 'Failed to load settings')
+        } finally {
+          setSettingsLoading(false)
+        }
+      })()
+    } else {
+      // Reset form when leaving settings view
+      setSettingsCurrentPassword('')
+      setSettingsDisplayName('')
+      setSettingsNewEmail('')
+      setSettingsNewPassword('')
+      setSettingsConfirmPassword('')
+      setSettingsSuccess(null)
+      setSettingsError(null)
+    }
+  }, [view])
+
   useEffect(() => {
     if(view !== 'detail'){
       setDetailLoading(false)
@@ -1369,6 +1539,26 @@ export default function App() {
     })()
   }, [view, location.pathname])
 
+  // Check watchlist status when detail data or profile data changes
+  useEffect(() => {
+    if (detailData && currentUser && profileData) {
+      const mediaType = detailData.media_type
+      const id = mediaType === 'movie' 
+        ? (detailData as MovieDetail).movie_id 
+        : (detailData as ShowDetail).show_id
+      
+      if (mediaType === 'movie') {
+        const inWatchlist = profileData.watchlist.movies.some(m => m.id === id)
+        setIsInWatchlist(inWatchlist)
+      } else {
+        const inWatchlist = profileData.watchlist.tv.some(t => t.id === id)
+        setIsInWatchlist(inWatchlist)
+      }
+    } else {
+      setIsInWatchlist(false)
+    }
+  }, [detailData, currentUser, profileData])
+
   if(view === 'login'){
     const onSubmit = async (ev: React.FormEvent) => {
       ev.preventDefault()
@@ -1383,9 +1573,10 @@ export default function App() {
         const res = await login(email.trim(), password)
         if(res.ok){
           const profile = { 
-            user: (res as any).user, 
+            user: (res as any).display_name || (res as any).user, 
             email: (res as any).email, 
             user_id: (res as any).user_id,
+            display_name: (res as any).display_name || (res as any).user,
             is_admin: (res as any).is_admin || false
           }
           setCurrentUser(profile)
@@ -1735,6 +1926,1244 @@ export default function App() {
           <button className="btn-link" onClick={()=>navigateToView('login')}>Back</button>
         </div>
         <p style={{fontSize:'12px', color:'#666', marginTop:'8px'}}>Passwords are stored hashed for security and shown here as stored values.</p>
+      </div>
+    )
+  }
+
+  if(view === 'profile'){
+    if(!currentUser){
+      return (
+        <div className="container">
+          <header className="header">
+            <div className="header-left">
+              <div className="brand-group">
+                <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
+                  Movie &amp; TV Analytics
+                </button>
+              </div>
+            </div>
+            <div className="header-right">
+              <div className="header-actions">
+                {renderAccountControls()}
+              </div>
+            </div>
+          </header>
+          <section className="settings-layout">
+            <div className="card" style={{padding:'32px', background:'rgba(20,20,28,0.95)', border:'1px solid rgba(255,255,255,0.08)', borderRadius:'16px', textAlign:'center'}}>
+              <h1 className="form-title" style={{marginBottom:12, color:'var(--text)'}}>Profile</h1>
+              <p style={{textAlign:'center', color:'var(--muted)', marginBottom:'24px'}}>
+                Please log in to view your profile and stats.
+              </p>
+              <button className="btn-primary" onClick={() => navigateToView('login')} style={{width:'100%'}}>
+                Go to Login
+              </button>
+              <div className="auth-card-footer" style={{marginTop:'20px'}}>
+                <button className="back-link-button" onClick={()=>navigateToView('app')}>← Back to app</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )
+    }
+
+    const stats = profileData?.stats
+    const userInfo = profileData?.user
+    const displayName = userInfo?.display_name || currentUser?.display_name || currentUser?.user || 'User'
+
+    return (
+      <div className="container">
+        <header className="header">
+          <div className="header-left">
+            <div className="brand-group">
+              <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
+                Movie &amp; TV Analytics
+              </button>
+            </div>
+          </div>
+          <div className="header-right">
+            <nav className="header-nav" aria-label="Primary navigation">
+              {primaryNav.map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={()=>navigateToTab(item.id)}
+                  aria-current={tab === item.id ? 'page' : undefined}
+                  className={`nav-pill ${tab === item.id ? 'active' : ''}`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+            <div className="header-actions">
+              {renderAccountControls()}
+            </div>
+          </div>
+        </header>
+
+        {/* Profile Hero Section */}
+        <div style={{
+          background:'linear-gradient(135deg, rgba(229, 9, 20, 0.15) 0%, rgba(11, 11, 15, 0.95) 100%)',
+          border:'1px solid rgba(229, 9, 20, 0.25)',
+          borderRadius:'20px',
+          padding:'40px 32px',
+          marginBottom:'32px',
+          position:'relative',
+          overflow:'hidden'
+        }}>
+          <div style={{position:'relative', zIndex:1, display:'flex', alignItems:'center', gap:'24px'}}>
+            <div className="avatar-circle" style={{width:80, height:80, fontSize:'32px'}}>
+              <span className="avatar-initials">
+                {displayName.split(/\s+/).slice(0,2).map(n=>n.charAt(0).toUpperCase()).join('') || '👤'}
+              </span>
+            </div>
+            <div style={{flex:1}}>
+              <h1 style={{margin:0, fontSize:'36px', fontWeight:800, color:'var(--text)', marginBottom:'8px'}}>
+                {displayName}
+              </h1>
+              <div style={{display:'flex', gap:'24px', alignItems:'center', flexWrap:'wrap'}}>
+                {userInfo?.email && (
+                  <div style={{color:'var(--muted)', fontSize:'14px'}}>{userInfo.email}</div>
+                )}
+                {userInfo?.created_at && (
+                  <div style={{color:'var(--muted)', fontSize:'14px'}}>
+                    Member since {new Date(userInfo.created_at).toLocaleDateString('en-US', { month:'long', year:'numeric' })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Stats Section - Separated by Movies and TV */}
+        {profileLoading ? (
+          <div style={{textAlign:'center', padding:'60px 20px', color:'var(--muted)'}}>Loading your profile...</div>
+        ) : profileError ? (
+          <div style={{textAlign:'center', padding:'60px 20px', color:'#ef5350'}}>{profileError}</div>
+        ) : stats ? (
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'24px', marginBottom:'40px'}}>
+            {/* Movies Stats */}
+            <div style={{
+              background:'rgba(20, 20, 28, 0.95)',
+              border:'1px solid rgba(229, 9, 20, 0.2)',
+              borderRadius:'20px',
+              padding:'32px',
+              position:'relative',
+              overflow:'hidden'
+            }}>
+              <div style={{
+                position:'absolute',
+                top:0,
+                right:0,
+                width:200,
+                height:200,
+                background:'radial-gradient(circle, rgba(229, 9, 20, 0.15) 0%, transparent 70%)',
+                opacity:0.6
+              }}></div>
+              <div style={{position:'relative', zIndex:1}}>
+                <div style={{display:'flex', alignItems:'center', gap:'12px', marginBottom:'24px'}}>
+                  <div style={{fontSize:'24px'}}>🎬</div>
+                  <h2 style={{margin:0, fontSize:'22px', fontWeight:700, color:'var(--text)'}}>Movies</h2>
+                </div>
+                <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px'}}>
+                  <div>
+                    <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Reviews</div>
+                    <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>{stats.movies?.review_count || 0}</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Avg Rating</div>
+                    <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>
+                      {stats.movies?.avg_rating?.toFixed(1) || '0.0'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Hours Watched</div>
+                    <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>{stats.movies?.estimated_hours || 0}</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Discussion Posts</div>
+                    <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>{stats.movies?.discussion_count || 0}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* TV Stats */}
+            <div style={{
+              background:'rgba(20, 20, 28, 0.95)',
+              border:'1px solid rgba(37, 99, 235, 0.2)',
+              borderRadius:'20px',
+              padding:'32px',
+              position:'relative',
+              overflow:'hidden'
+            }}>
+              <div style={{
+                position:'absolute',
+                top:0,
+                right:0,
+                width:200,
+                height:200,
+                background:'radial-gradient(circle, rgba(37, 99, 235, 0.15) 0%, transparent 70%)',
+                opacity:0.6
+              }}></div>
+              <div style={{position:'relative', zIndex:1}}>
+                <div style={{display:'flex', alignItems:'center', gap:'12px', marginBottom:'24px'}}>
+                  <div style={{fontSize:'24px'}}>📺</div>
+                  <h2 style={{margin:0, fontSize:'22px', fontWeight:700, color:'var(--text)'}}>TV Shows</h2>
+                </div>
+                <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px'}}>
+                  <div>
+                    <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Reviews</div>
+                    <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>{stats.tv?.review_count || 0}</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Avg Rating</div>
+                    <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>
+                      {stats.tv?.avg_rating?.toFixed(1) || '0.0'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Hours Watched</div>
+                    <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>{stats.tv?.estimated_hours || 0}</div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Discussion Posts</div>
+                    <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>{stats.tv?.discussion_count || 0}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Favorites Section - Carousels stacked vertically */}
+        <div style={{marginBottom:'40px'}}>
+          <h2 style={{margin:0, marginBottom:'32px', fontSize:'24px', fontWeight:700, color:'var(--text)'}}>Your Favorites</h2>
+          
+          {/* Movie Favorites Carousel */}
+          <div style={{marginBottom:'40px'}}>
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
+              <h3 style={{margin:0, fontSize:'20px', fontWeight:600, color:'var(--text)', display:'flex', alignItems:'center', gap:'10px'}}>
+                <span style={{fontSize:'24px'}}>🎬</span> Movies
+              </h3>
+              {movieFavorites.length > 0 && (
+                <div style={{fontSize:'14px', color:'var(--muted)'}}>
+                  {movieFavorites.length} {movieFavorites.length === 1 ? 'item' : 'items'}
+                  {movieFavTotalPages > 1 && ` • Page ${movieFavPage + 1} of ${movieFavTotalPages}`}
+                </div>
+              )}
+            </div>
+            {profileLoading ? (
+              <p style={{color:'var(--muted)', textAlign:'center', padding:'40px'}}>Loading...</p>
+            ) : movieFavorites.length === 0 ? (
+              <div style={{
+                padding:'60px 20px',
+                textAlign:'center',
+                background:'rgba(20, 20, 28, 0.95)',
+                border:'1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius:'16px'
+              }}>
+                <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>🎬</div>
+                <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No movie favorites yet. Start rating movies!</p>
+              </div>
+            ) : (
+              <>
+                <div className={`new-release-grid-wrapper ${movieFavTransitionType === 'fade' ? `new-release-grid-wrapper-${'visible'}` : ''}`} style={{position:'relative', minHeight:'300px'}}>
+                  <div className={`new-release-grid ${movieFavTransitionType === 'slide' ? `new-release-grid-slide-${movieFavSlideDirection}` : ''}`} style={{display:'grid', gap:'14px', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', alignContent:'start'}}>
+                    {displayedMovieFavorites.map((fav, idx) => {
+                      const posterUrl = getImageUrl(fav.poster_path, 'w300')
+                      return (
+                        <Card
+                          key={`movie-fav-${fav.id || idx}`}
+                          item={{
+                            id: fav.id,
+                            tmdb_id: fav.id || 0,
+                            media_type: 'movie',
+                            title: fav.title,
+                            poster_path: fav.poster_path || undefined,
+                            vote_average: fav.rating
+                          } as MediaItem}
+                          onClick={() => {
+                            if(fav.id) {
+                              navigateToDetail('movie', fav.id)
+                            }
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                </div>
+                {movieFavTotalPages > 1 && (
+                  <div className="pagination-controls" style={{marginTop:'20px'}} aria-label="Movie favorites pagination">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMovieFavTransitionType('slide')
+                        setMovieFavSlideDirection('right')
+                        setMovieFavPage(prev => Math.max(0, prev - 1))
+                      }}
+                      disabled={profileLoading || movieFavPage === 0}
+                    >
+                      ‹ Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMovieFavTransitionType('slide')
+                        setMovieFavSlideDirection('left')
+                        setMovieFavPage(prev => Math.min(movieFavTotalPages - 1, prev + 1))
+                      }}
+                      disabled={profileLoading || movieFavPage >= movieFavTotalPages - 1}
+                    >
+                      Next ›
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* TV Favorites Carousel */}
+          <div>
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
+              <h3 style={{margin:0, fontSize:'20px', fontWeight:600, color:'var(--text)', display:'flex', alignItems:'center', gap:'10px'}}>
+                <span style={{fontSize:'24px'}}>📺</span> TV Shows
+              </h3>
+              {tvFavorites.length > 0 && (
+                <div style={{fontSize:'14px', color:'var(--muted)'}}>
+                  {tvFavorites.length} {tvFavorites.length === 1 ? 'item' : 'items'}
+                  {tvFavTotalPages > 1 && ` • Page ${tvFavPage + 1} of ${tvFavTotalPages}`}
+                </div>
+              )}
+            </div>
+            {profileLoading ? (
+              <p style={{color:'var(--muted)', textAlign:'center', padding:'40px'}}>Loading...</p>
+            ) : tvFavorites.length === 0 ? (
+              <div style={{
+                padding:'60px 20px',
+                textAlign:'center',
+                background:'rgba(20, 20, 28, 0.95)',
+                border:'1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius:'16px'
+              }}>
+                <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>📺</div>
+                <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No TV favorites yet. Start rating shows!</p>
+              </div>
+            ) : (
+              <>
+                <div className={`new-release-grid-wrapper ${tvFavTransitionType === 'fade' ? `new-release-grid-wrapper-${'visible'}` : ''}`} style={{position:'relative', minHeight:'300px'}}>
+                  <div className={`new-release-grid ${tvFavTransitionType === 'slide' ? `new-release-grid-slide-${tvFavSlideDirection}` : ''}`} style={{display:'grid', gap:'14px', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', alignContent:'start'}}>
+                    {displayedTvFavorites.map((fav, idx) => {
+                      const posterUrl = getImageUrl(fav.poster_path, 'w300')
+                      return (
+                        <Card
+                          key={`tv-fav-${fav.id || idx}`}
+                          item={{
+                            id: fav.id,
+                            tmdb_id: fav.id || 0,
+                            media_type: 'tv',
+                            title: fav.title,
+                            poster_path: fav.poster_path || undefined,
+                            vote_average: fav.rating
+                          } as MediaItem}
+                          onClick={() => {
+                            if(fav.id) {
+                              navigateToDetail('tv', fav.id)
+                            }
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                </div>
+                {tvFavTotalPages > 1 && (
+                  <div className="pagination-controls" style={{marginTop:'20px'}} aria-label="TV favorites pagination">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTvFavTransitionType('slide')
+                        setTvFavSlideDirection('right')
+                        setTvFavPage(prev => Math.max(0, prev - 1))
+                      }}
+                      disabled={profileLoading || tvFavPage === 0}
+                    >
+                      ‹ Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTvFavTransitionType('slide')
+                        setTvFavSlideDirection('left')
+                        setTvFavPage(prev => Math.min(tvFavTotalPages - 1, prev + 1))
+                      }}
+                      disabled={profileLoading || tvFavPage >= tvFavTotalPages - 1}
+                    >
+                      Next ›
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+
+        {/* Watchlist Section - Horizontal Scrollable Sections */}
+        <div>
+          <h2 style={{margin:0, marginBottom:'32px', fontSize:'24px', fontWeight:700, color:'var(--text)'}}>My Watchlist</h2>
+          
+          {/* Movie Watchlist - Red Theme */}
+          <div style={{
+            marginBottom:'40px',
+            padding:'24px',
+            background:'linear-gradient(135deg, rgba(229, 9, 20, 0.08) 0%, rgba(184, 7, 15, 0.04) 100%)',
+            border:'2px solid rgba(229, 9, 20, 0.3)',
+            borderRadius:'20px',
+            boxShadow:'0 8px 32px rgba(229, 9, 20, 0.12)',
+            transition:'all 0.3s ease'
+          }}>
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
+              <h3 style={{
+                margin:0, 
+                fontSize:'22px', 
+                fontWeight:700, 
+                color:'#fff', 
+                display:'flex', 
+                alignItems:'center', 
+                gap:'12px',
+                textShadow:'0 2px 8px rgba(229, 9, 20, 0.4)'
+              }}>
+                <span style={{
+                  fontSize:'28px',
+                  filter:'drop-shadow(0 2px 4px rgba(229, 9, 20, 0.5))'
+                }}>🎬</span> 
+                <span style={{
+                  background:'linear-gradient(135deg, #ff6b6b 0%, #e50914 100%)',
+                  WebkitBackgroundClip:'text',
+                  WebkitTextFillColor:'transparent',
+                  backgroundClip:'text'
+                }}>Movies</span>
+              </h3>
+              <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
+                {movieWatchlist.length > 0 && (
+                  <div style={{
+                    fontSize:'14px', 
+                    color:'rgba(255, 255, 255, 0.8)',
+                    background:'rgba(229, 9, 20, 0.2)',
+                    padding:'6px 14px',
+                    borderRadius:'12px',
+                    border:'1px solid rgba(229, 9, 20, 0.3)'
+                  }}>
+                    {movieWatchlist.length} {movieWatchlist.length === 1 ? 'item' : 'items'}
+                  </div>
+                )}
+                {movieWatchlist.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setMovieWatchlistExpanded(!movieWatchlistExpanded)}
+                    style={{
+                      background:'rgba(229, 9, 20, 0.2)',
+                      border:'1px solid rgba(229, 9, 20, 0.4)',
+                      borderRadius:'10px',
+                      width:'40px',
+                      height:'40px',
+                      display:'flex',
+                      alignItems:'center',
+                      justifyContent:'center',
+                      cursor:'pointer',
+                      transition:'all 0.3s ease',
+                      color:'#fff',
+                      fontSize:'18px',
+                      padding:0
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(229, 9, 20, 0.35)'
+                      e.currentTarget.style.borderColor = 'rgba(229, 9, 20, 0.6)'
+                      e.currentTarget.style.transform = 'scale(1.05)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(229, 9, 20, 0.2)'
+                      e.currentTarget.style.borderColor = 'rgba(229, 9, 20, 0.4)'
+                      e.currentTarget.style.transform = 'scale(1)'
+                    }}
+                    aria-label={movieWatchlistExpanded ? 'Collapse movies' : 'Expand movies'}
+                  >
+                    <span style={{
+                      display:'inline-block',
+                      transform: movieWatchlistExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                      transition:'transform 0.3s ease'
+                    }}>▼</span>
+                  </button>
+                )}
+              </div>
+            </div>
+            {profileLoading ? (
+              <p style={{color:'var(--muted)', textAlign:'center', padding:'40px'}}>Loading...</p>
+            ) : movieWatchlist.length === 0 ? (
+              <div style={{
+                padding:'60px 20px',
+                textAlign:'center',
+                background:'rgba(20, 20, 28, 0.6)',
+                border:'1px solid rgba(229, 9, 20, 0.3)',
+                borderRadius:'16px'
+              }}>
+                <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>🎬</div>
+                <p style={{color:'rgba(255, 255, 255, 0.7)', fontSize:'16px', margin:0}}>No movies in your watchlist. Add movies to watch later!</p>
+              </div>
+            ) : (
+              <div style={{
+                maxHeight: movieWatchlistExpanded ? '600px' : '0',
+                overflow:'hidden',
+                transition:'max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease',
+                opacity: movieWatchlistExpanded ? 1 : 0
+              }}>
+                <div style={{
+                  display:'grid',
+                  gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))',
+                  gap:'16px',
+                  maxHeight:'600px',
+                  overflowY:'auto',
+                  overflowX:'hidden',
+                  paddingRight:'8px',
+                  paddingTop:'8px',
+                  scrollbarWidth:'thin',
+                  scrollbarColor:'rgba(229, 9, 20, 0.5) rgba(20, 20, 28, 0.3)',
+                  WebkitOverflowScrolling:'touch'
+                }}>
+                  {movieWatchlist.map((item, idx) => {
+                    return (
+                      <Card
+                        key={`movie-watchlist-${item.id || idx}`}
+                        item={{
+                          id: item.id,
+                          tmdb_id: item.id || 0,
+                          media_type: 'movie',
+                          title: item.title,
+                          poster_path: item.poster_path || undefined,
+                        } as MediaItem}
+                        onClick={() => {
+                          if(item.id) {
+                            navigateToDetail('movie', item.id)
+                          }
+                        }}
+                      />
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* TV Watchlist - Blue Theme */}
+          <div style={{
+            padding:'24px',
+            background:'linear-gradient(135deg, rgba(37, 99, 235, 0.08) 0%, rgba(30, 64, 175, 0.04) 100%)',
+            border:'2px solid rgba(37, 99, 235, 0.3)',
+            borderRadius:'20px',
+            boxShadow:'0 8px 32px rgba(37, 99, 235, 0.12)',
+            transition:'all 0.3s ease'
+          }}>
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
+              <h3 style={{
+                margin:0, 
+                fontSize:'22px', 
+                fontWeight:700, 
+                color:'#fff', 
+                display:'flex', 
+                alignItems:'center', 
+                gap:'12px',
+                textShadow:'0 2px 8px rgba(37, 99, 235, 0.4)'
+              }}>
+                <span style={{
+                  fontSize:'28px',
+                  filter:'drop-shadow(0 2px 4px rgba(37, 99, 235, 0.5))'
+                }}>📺</span> 
+                <span style={{
+                  background:'linear-gradient(135deg, #60a5fa 0%, #2563eb 100%)',
+                  WebkitBackgroundClip:'text',
+                  WebkitTextFillColor:'transparent',
+                  backgroundClip:'text'
+                }}>TV Shows</span>
+              </h3>
+              <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
+                {tvWatchlist.length > 0 && (
+                  <div style={{
+                    fontSize:'14px', 
+                    color:'rgba(255, 255, 255, 0.8)',
+                    background:'rgba(37, 99, 235, 0.2)',
+                    padding:'6px 14px',
+                    borderRadius:'12px',
+                    border:'1px solid rgba(37, 99, 235, 0.3)'
+                  }}>
+                    {tvWatchlist.length} {tvWatchlist.length === 1 ? 'item' : 'items'}
+                  </div>
+                )}
+                {tvWatchlist.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setTvWatchlistExpanded(!tvWatchlistExpanded)}
+                    style={{
+                      background:'rgba(37, 99, 235, 0.2)',
+                      border:'1px solid rgba(37, 99, 235, 0.4)',
+                      borderRadius:'10px',
+                      width:'40px',
+                      height:'40px',
+                      display:'flex',
+                      alignItems:'center',
+                      justifyContent:'center',
+                      cursor:'pointer',
+                      transition:'all 0.3s ease',
+                      color:'#fff',
+                      fontSize:'18px',
+                      padding:0
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(37, 99, 235, 0.35)'
+                      e.currentTarget.style.borderColor = 'rgba(37, 99, 235, 0.6)'
+                      e.currentTarget.style.transform = 'scale(1.05)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(37, 99, 235, 0.2)'
+                      e.currentTarget.style.borderColor = 'rgba(37, 99, 235, 0.4)'
+                      e.currentTarget.style.transform = 'scale(1)'
+                    }}
+                    aria-label={tvWatchlistExpanded ? 'Collapse TV shows' : 'Expand TV shows'}
+                  >
+                    <span style={{
+                      display:'inline-block',
+                      transform: tvWatchlistExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                      transition:'transform 0.3s ease'
+                    }}>▼</span>
+                  </button>
+                )}
+              </div>
+            </div>
+            {profileLoading ? (
+              <p style={{color:'var(--muted)', textAlign:'center', padding:'40px'}}>Loading...</p>
+            ) : tvWatchlist.length === 0 ? (
+              <div style={{
+                padding:'60px 20px',
+                textAlign:'center',
+                background:'rgba(20, 20, 28, 0.6)',
+                border:'1px solid rgba(37, 99, 235, 0.3)',
+                borderRadius:'16px'
+              }}>
+                <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>📺</div>
+                <p style={{color:'rgba(255, 255, 255, 0.7)', fontSize:'16px', margin:0}}>No TV shows in your watchlist. Add shows to watch later!</p>
+              </div>
+            ) : (
+              <div style={{
+                maxHeight: tvWatchlistExpanded ? '600px' : '0',
+                overflow:'hidden',
+                transition:'max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease',
+                opacity: tvWatchlistExpanded ? 1 : 0
+              }}>
+                <div style={{
+                  display:'grid',
+                  gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))',
+                  gap:'16px',
+                  maxHeight:'600px',
+                  overflowY:'auto',
+                  overflowX:'hidden',
+                  paddingRight:'8px',
+                  paddingTop:'8px',
+                  scrollbarWidth:'thin',
+                  scrollbarColor:'rgba(37, 99, 235, 0.5) rgba(20, 20, 28, 0.3)',
+                  WebkitOverflowScrolling:'touch'
+                }}>
+                  {tvWatchlist.map((item, idx) => {
+                    return (
+                      <Card
+                        key={`tv-watchlist-${item.id || idx}`}
+                        item={{
+                          id: item.id,
+                          tmdb_id: item.id || 0,
+                          media_type: 'tv',
+                          title: item.title,
+                          poster_path: item.poster_path || undefined,
+                        } as MediaItem}
+                        onClick={() => {
+                          if(item.id) {
+                            navigateToDetail('tv', item.id)
+                          }
+                        }}
+                      />
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if(view === 'settings'){
+    if(!currentUser){
+      return (
+        <div className="container">
+          <header className="header">
+            <div className="header-left">
+              <div className="brand-group">
+                <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
+                  Movie &amp; TV Analytics
+                </button>
+              </div>
+            </div>
+            <div className="header-right">
+              <div className="header-actions">
+                {renderAccountControls()}
+              </div>
+            </div>
+          </header>
+          <section className="settings-layout">
+            <div className="card" style={{
+              padding:'32px',
+              background:'rgba(20, 20, 28, 0.95)',
+              border:'1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius:'16px',
+              textAlign:'center'
+            }}>
+              <h1 className="form-title" style={{marginBottom:12, color:'var(--text)'}}>User Settings</h1>
+              <p style={{textAlign:'center', color:'var(--muted)', marginBottom:'24px'}}>
+                Please log in to access your account settings.
+              </p>
+              <button className="btn-primary" onClick={() => navigateToView('login')} style={{width:'100%'}}>
+                Go to Login
+              </button>
+              <div className="auth-card-footer" style={{marginTop:'20px'}}>
+                <button className="back-link-button" onClick={()=>navigateToView('app')}>← Back to app</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )
+    }
+
+    const getPasswordStrength = (password: string) => {
+      if(!password) return { score: 0, label: '', color: 'rgba(255, 255, 255, 0.2)' }
+      let score = 0
+      if(password.length >= 8) score++
+      if(/[a-z]/.test(password) && /[A-Z]/.test(password)) score++
+      if(/\d/.test(password)) score++
+      if(/[^a-zA-Z0-9]/.test(password)) score++
+      
+      if(score <= 1) return { score, label: 'Weak', color: '#ef5350' }
+      if(score === 2) return { score, label: 'Fair', color: '#ffa726' }
+      if(score === 3) return { score, label: 'Good', color: '#66bb6a' }
+      return { score, label: 'Strong', color: '#81c784' }
+    }
+
+    const passwordStrength = getPasswordStrength(settingsNewPassword)
+
+    const handleSettingsSubmit = async (ev: React.FormEvent) => {
+      ev.preventDefault()
+      setSettingsError(null)
+      setSettingsSuccess(null)
+
+      if(!settingsCurrentPassword){
+        setSettingsError('Current password is required to make changes')
+        return
+      }
+
+      if(settingsNewPassword && settingsNewPassword !== settingsConfirmPassword){
+        setSettingsError('New passwords do not match')
+        return
+      }
+
+      const currentDisplayName = settingsData?.display_name || settingsData?.email?.split('@')[0] || ''
+      const hasDisplayNameChange = settingsDisplayName && settingsDisplayName.trim() !== currentDisplayName.trim()
+      const hasEmailChange = settingsNewEmail && settingsNewEmail !== settingsData?.email
+      const hasPasswordChange = settingsNewPassword && settingsNewPassword.length > 0
+
+      if(!hasDisplayNameChange && !hasEmailChange && !hasPasswordChange){
+        setSettingsError('Please make at least one change before saving')
+        return
+      }
+
+      if(settingsDisplayName && settingsDisplayName.trim().length > 50){
+        setSettingsError('Display name must be 50 characters or less')
+        return
+      }
+
+      setSettingsSaving(true)
+
+      try {
+        const result = await updateUserSettings({
+          current_password: settingsCurrentPassword,
+          display_name: hasDisplayNameChange ? settingsDisplayName.trim() : undefined,
+          new_email: hasEmailChange ? settingsNewEmail : undefined,
+          new_password: hasPasswordChange ? settingsNewPassword : undefined
+        })
+
+        if(result.ok){
+          setSettingsSuccess(result.message || 'Your settings have been updated.')
+          setSettingsCurrentPassword('')
+          setSettingsNewPassword('')
+          setSettingsConfirmPassword('')
+          
+          // Update current user state if display_name or email changed
+          if(hasDisplayNameChange || hasEmailChange){
+            const updatedUser = {
+              ...currentUser,
+              email: hasEmailChange ? settingsNewEmail : currentUser?.email,
+              user: hasDisplayNameChange ? settingsDisplayName.trim() : (hasEmailChange ? settingsNewEmail.split('@')[0] : currentUser?.user),
+              display_name: hasDisplayNameChange ? settingsDisplayName.trim() : currentUser?.display_name
+            }
+            setCurrentUser(updatedUser)
+            if(hasEmailChange && updatedUser.user_id && updatedUser.email){
+              setAuthToken(updatedUser.user_id, updatedUser.email)
+            }
+            try {
+              sessionStorage.setItem('currentUser', JSON.stringify(updatedUser))
+              if(remember){
+                localStorage.setItem('currentUser', JSON.stringify(updatedUser))
+              }
+            } catch {}
+          }
+          
+          const refreshResult = await getUserSettings()
+          if(refreshResult.ok){
+            setSettingsData({
+              user_id: refreshResult.user_id,
+              email: refreshResult.email,
+              display_name: refreshResult.display_name,
+              created_at: refreshResult.created_at,
+              is_admin: refreshResult.is_admin
+            })
+            setSettingsDisplayName(refreshResult.display_name || refreshResult.email.split('@')[0] || '')
+            setSettingsNewEmail(refreshResult.email)
+          }
+        } else {
+          setSettingsError(result.error || 'Failed to update settings')
+        }
+      } catch (e: any) {
+        setSettingsError(e?.message || 'An unexpected error occurred. Please try again.')
+      } finally {
+        setSettingsSaving(false)
+      }
+    }
+
+    return (
+      <div className="container">
+        <header className="header">
+          <div className="header-left">
+            <div className="brand-group">
+              <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
+                Movie &amp; TV Analytics
+              </button>
+            </div>
+          </div>
+          <div className="header-right">
+            <nav className="header-nav" aria-label="Primary navigation">
+              {primaryNav.map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={()=>navigateToTab(item.id)}
+                  aria-current={tab === item.id ? 'page' : undefined}
+                  className={`nav-pill ${tab === item.id ? 'active' : ''}`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+            <div className="header-actions">
+              {renderAccountControls()}
+            </div>
+          </div>
+        </header>
+
+        <section className="settings-layout" style={{display:'grid', gridTemplateColumns:'1fr 1.4fr', gap:'20px', alignItems:'start'}}>
+          <div style={{display:'flex', flexDirection:'column', gap:'20px'}}>
+            {/* Account Info Card */}
+            <div className="card" style={{
+              padding:'24px',
+              background:'rgba(20, 20, 28, 0.95)',
+              border:'1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius:'16px'
+            }}>
+              <div style={{display:'flex', alignItems:'center', gap:'14px', marginBottom:'20px'}}>
+                <div className="avatar-circle" style={{width:52, height:52}}>
+                  <span className="avatar-initials">
+                    {settingsData?.display_name 
+                      ? settingsData.display_name.split(/\s+/).slice(0, 2).map(n => n.charAt(0).toUpperCase()).join('')
+                      : avatarInitials || '👤'}
+                  </span>
+                </div>
+                <div>
+                  <div style={{fontWeight:700, fontSize:'18px', color:'var(--text)'}}>
+                    {settingsData?.display_name || currentUser.user}
+                  </div>
+                  <div style={{color:'var(--muted)', fontSize:'13px', marginTop:'2px'}}>{settingsData?.email}</div>
+                </div>
+              </div>
+              <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px,1fr))', gap:'12px'}}>
+                <div style={{
+                  padding:'14px',
+                  border:'1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius:'10px',
+                  background:'rgba(17, 17, 23, 0.6)'
+                }}>
+                  <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px'}}>Account Type</div>
+                  <div style={{fontWeight:600, marginTop:'4px', color:'var(--text)'}}>{settingsData?.is_admin ? 'Admin' : 'Regular'}</div>
+                </div>
+                {settingsData?.created_at && (
+                  <div style={{
+                    padding:'14px',
+                    border:'1px solid rgba(255, 255, 255, 0.08)',
+                    borderRadius:'10px',
+                    background:'rgba(17, 17, 23, 0.6)'
+                  }}>
+                    <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px'}}>Member Since</div>
+                    <div style={{fontWeight:600, marginTop:'4px', color:'var(--text)'}}>
+                      {new Date(settingsData.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Delete Account Card */}
+            <div className="card" style={{
+              padding:'24px',
+              background:'rgba(198, 40, 40, 0.08)',
+              border:'1px solid rgba(244, 67, 54, 0.2)',
+              borderRadius:'16px'
+            }}>
+              <h3 style={{margin:0, marginBottom:'8px', fontSize:'18px', fontWeight:700, color:'#ef5350'}}>Delete Account</h3>
+              <p style={{color:'var(--muted)', marginBottom:'20px', fontSize:'14px'}}>
+                Permanently delete your account and all associated data. This action cannot be undone.
+              </p>
+
+              {deleteAccountError && (
+                <div style={{
+                  background:'rgba(198, 40, 40, 0.15)',
+                  border:'1px solid rgba(244, 67, 54, 0.3)',
+                  color:'#ef5350',
+                  padding:'14px',
+                  borderRadius:'8px',
+                  marginBottom:'16px'
+                }}>
+                  {deleteAccountError}
+                </div>
+              )}
+
+              {!showDeleteConfirm ? (
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  style={{
+                    background:'rgba(244, 67, 54, 0.1)',
+                    border:'1px solid rgba(244, 67, 54, 0.3)',
+                    color:'#ef5350',
+                    padding:'12px 24px',
+                    borderRadius:'8px',
+                    cursor:'pointer',
+                    fontWeight:600,
+                    fontSize:'14px',
+                    transition:'all 0.2s ease',
+                    width:'100%'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'rgba(244, 67, 54, 0.2)'
+                    e.currentTarget.style.borderColor = 'rgba(244, 67, 54, 0.5)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'rgba(244, 67, 54, 0.1)'
+                    e.currentTarget.style.borderColor = 'rgba(244, 67, 54, 0.3)'
+                  }}
+                >
+                  Delete My Account
+                </button>
+              ) : (
+                <div>
+                  <div style={{marginBottom:'16px'}}>
+                    <label className="form-label" style={{marginBottom:'8px', display:'block'}}>
+                      Enter your password to confirm
+                    </label>
+                    <input
+                      type="password"
+                      className="form-input"
+                      value={deleteAccountPassword}
+                      onChange={(e) => setDeleteAccountPassword(e.target.value)}
+                      placeholder="Your password"
+                      style={{width:'100%'}}
+                    />
+                  </div>
+                  <div style={{marginBottom:'16px'}}>
+                    <label className="form-label" style={{marginBottom:'8px', display:'block'}}>
+                      Type "DELETE" to confirm
+                    </label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={deleteAccountConfirm}
+                      onChange={(e) => setDeleteAccountConfirm(e.target.value)}
+                      placeholder="Type DELETE"
+                      style={{width:'100%'}}
+                    />
+                  </div>
+                  <div style={{display:'flex', gap:'12px'}}>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setDeleteAccountError(null)
+                        if(!deleteAccountPassword){
+                          setDeleteAccountError('Password is required')
+                          return
+                        }
+                        if(deleteAccountConfirm !== 'DELETE'){
+                          setDeleteAccountError('Please type "DELETE" to confirm')
+                          return
+                        }
+                        setDeleteAccountDeleting(true)
+                        try {
+                          const result = await deleteUserAccount(deleteAccountPassword)
+                          if(result.ok){
+                            // Clear auth and redirect to login
+                            setCurrentUser(null)
+                            clearAuthToken()
+                            try {
+                              sessionStorage.removeItem('currentUser')
+                              localStorage.removeItem('currentUser')
+                              localStorage.removeItem('rememberUser')
+                            } catch {}
+                            navigateToView('login')
+                          } else {
+                            setDeleteAccountError(result.error || 'Failed to delete account')
+                          }
+                        } catch (e: any) {
+                          setDeleteAccountError(e?.message || 'An unexpected error occurred')
+                        } finally {
+                          setDeleteAccountDeleting(false)
+                        }
+                      }}
+                      disabled={deleteAccountDeleting}
+                      style={{
+                        background:'#ef5350',
+                        border:'1px solid #ef5350',
+                        color:'#fff',
+                        padding:'12px 24px',
+                        borderRadius:'8px',
+                        cursor:deleteAccountDeleting ? 'not-allowed' : 'pointer',
+                        fontWeight:600,
+                        fontSize:'14px',
+                        opacity:deleteAccountDeleting ? 0.6 : 1,
+                        transition:'all 0.2s ease',
+                        flex:1
+                      }}
+                      onMouseEnter={(e) => {
+                        if(!deleteAccountDeleting){
+                          e.currentTarget.style.background = '#d32f2f'
+                          e.currentTarget.style.borderColor = '#d32f2f'
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if(!deleteAccountDeleting){
+                          e.currentTarget.style.background = '#ef5350'
+                          e.currentTarget.style.borderColor = '#ef5350'
+                        }
+                      }}
+                    >
+                      {deleteAccountDeleting ? 'Deleting...' : 'Confirm Deletion'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowDeleteConfirm(false)
+                        setDeleteAccountPassword('')
+                        setDeleteAccountConfirm('')
+                        setDeleteAccountError(null)
+                      }}
+                      disabled={deleteAccountDeleting}
+                      style={{
+                        background:'rgba(255, 255, 255, 0.05)',
+                        border:'1px solid rgba(255, 255, 255, 0.1)',
+                        color:'var(--text)',
+                        padding:'12px 24px',
+                        borderRadius:'8px',
+                        cursor:deleteAccountDeleting ? 'not-allowed' : 'pointer',
+                        fontWeight:600,
+                        fontSize:'14px',
+                        opacity:deleteAccountDeleting ? 0.6 : 1,
+                        transition:'all 0.2s ease',
+                        flex:1
+                      }}
+                      onMouseEnter={(e) => {
+                        if(!deleteAccountDeleting){
+                          e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if(!deleteAccountDeleting){
+                          e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'
+                        }
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="card" style={{
+            padding:'24px',
+            background:'rgba(20, 20, 28, 0.95)',
+            border:'1px solid rgba(255, 255, 255, 0.08)',
+            borderRadius:'16px'
+          }}>
+            <h2 className="form-title" style={{marginBottom:'8px', color:'var(--text)'}}>Account Settings</h2>
+            <p style={{color:'var(--muted)', marginBottom:'20px', fontSize:'14px'}}>Update your display name, email, or password. Current password is required.</p>
+
+            {settingsSuccess && (
+              <div style={{
+                background:'rgba(46, 125, 50, 0.15)',
+                border:'1px solid rgba(76, 175, 80, 0.3)',
+                color:'#81c784',
+                padding:'14px',
+                borderRadius:'8px',
+                marginBottom:'16px',
+                display:'flex',
+                alignItems:'center',
+                gap:'8px'
+              }}>
+                <span>✓</span>
+                <span>{settingsSuccess}</span>
+              </div>
+            )}
+
+            {settingsError && (
+              <div style={{
+                background:'rgba(198, 40, 40, 0.15)',
+                border:'1px solid rgba(244, 67, 54, 0.3)',
+                color:'#ef5350',
+                padding:'14px',
+                borderRadius:'8px',
+                marginBottom:'16px',
+                display:'flex',
+                alignItems:'center',
+                gap:'8px'
+              }}>
+                <span>⚠️</span>
+                <span>{settingsError}</span>
+              </div>
+            )}
+
+            <form className="auth-form" onSubmit={handleSettingsSubmit}>
+              <div className="form-group">
+                <label className="form-label">Current Password *</label>
+                <input 
+                  className="form-input" 
+                  type="password" 
+                  placeholder="Enter your current password" 
+                  value={settingsCurrentPassword} 
+                  onChange={e => setSettingsCurrentPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Display Name</label>
+                <input 
+                  className="form-input" 
+                  type="text" 
+                  placeholder={settingsData?.display_name || settingsData?.email?.split('@')[0] || 'Enter display name'}
+                  value={settingsDisplayName} 
+                  onChange={e => setSettingsDisplayName(e.target.value)}
+                  maxLength={50}
+                  autoComplete="name"
+                />
+                <div style={{fontSize:'12px', color:'var(--muted)', marginTop:'6px'}}>
+                  This is how your name appears throughout the app. Max 50 characters.
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">New Email</label>
+                <input 
+                  className="form-input" 
+                  type="email" 
+                  placeholder={settingsData?.email || 'Enter new email'}
+                  value={settingsNewEmail} 
+                  onChange={e => setSettingsNewEmail(e.target.value)}
+                  autoComplete="email"
+                />
+                <div style={{fontSize:'12px', color:'var(--muted)', marginTop:'6px'}}>
+                  Leave blank to keep your current email.
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">New Password</label>
+                <input 
+                  className="form-input" 
+                  type="password" 
+                  placeholder="Enter a new password (optional)" 
+                  value={settingsNewPassword} 
+                  onChange={e => setSettingsNewPassword(e.target.value)}
+                  autoComplete="new-password"
+                />
+                {settingsNewPassword && (
+                  <div style={{marginTop:'8px'}}>
+                    <div style={{height:'4px', background:'rgba(255, 255, 255, 0.1)', borderRadius:'2px', overflow:'hidden'}}>
+                      <div style={{width:`${(passwordStrength.score/4)*100}%`, height:'100%', background:passwordStrength.color, transition:'width 0.2s ease'}}></div>
+                    </div>
+                    <div style={{fontSize:'12px', color:passwordStrength.color, marginTop:'6px', fontWeight:500}}>
+                      {passwordStrength.label}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Confirm New Password</label>
+                <input 
+                  className="form-input" 
+                  type="password" 
+                  placeholder="Re-enter new password" 
+                  value={settingsConfirmPassword} 
+                  onChange={e => setSettingsConfirmPassword(e.target.value)}
+                  disabled={!settingsNewPassword}
+                  autoComplete="new-password"
+                  style={{background:!settingsNewPassword ? 'rgba(255, 255, 255, 0.03)' : 'transparent'}}
+                />
+                {settingsNewPassword && settingsConfirmPassword && (
+                  <div style={{
+                    fontSize:'12px',
+                    marginTop:'6px',
+                    color: settingsNewPassword === settingsConfirmPassword ? '#81c784' : '#ef5350',
+                    fontWeight:500
+                  }}>
+                    {settingsNewPassword === settingsConfirmPassword ? '✓ Passwords match' : '✗ Passwords do not match'}
+                  </div>
+                )}
+              </div>
+
+              <div style={{display:'flex', gap:'12px', marginTop:'16px'}}>
+                <button 
+                  className="btn-primary" 
+                  type="submit" 
+                  disabled={settingsSaving}
+                  style={{flex:1}}
+                >
+                  {settingsSaving ? 'Saving...' : 'Save Changes'}
+                </button>
+                <button 
+                  className="btn-secondary" 
+                  type="button" 
+                  onClick={() => navigateToView('app')}
+                  style={{flex:1}}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
       </div>
     )
   }
@@ -2217,105 +3646,223 @@ export default function App() {
                           <h1 className="detail-main-title">{detailData.title}</h1>
                         )}
                       </div>
-                      {currentUser?.is_admin && (
-                        <button
-                          type="button"
-                          className={`detail-edit-button ${detailEditMode ? 'detail-edit-button-active' : ''}`}
-                          onClick={async () => {
-                            if(detailEditMode) {
-                              // Save changes
-                              if(!detailData) return
-                              setEditSaving(true)
-                              try {
-                                const payload: UpdateMediaPayload = {
-                                  title: editTitle || undefined,
-                                  overview: editOverview || undefined,
-                                  language: editLanguage || undefined,
-                                  tmdb_score: editTmdbScore ? parseFloat(editTmdbScore) : undefined,
-                                  popularity: editPopularity ? parseFloat(editPopularity) : undefined,
-                                  genre: editGenre || undefined,
+                      <div style={{display:'flex', gap:'12px', alignItems:'center'}}>
+                        {currentUser && (
+                          <button
+                            type="button"
+                            className={`detail-watchlist-button ${isInWatchlist ? 'detail-watchlist-button-active' : ''}`}
+                            onClick={async () => {
+                              if(!currentUser || !detailData) return
+                              
+                              // Get user_id if not available
+                              let userId = currentUser.user_id
+                              if(!userId && currentUser.email) {
+                                try {
+                                  const userData = await getUserByEmail(currentUser.email)
+                                  if(userData.ok && userData.user_id) {
+                                    userId = userData.user_id
+                                    const updatedUser = { ...currentUser, user_id: userId }
+                                    setCurrentUser(updatedUser)
+                                    try {
+                                      sessionStorage.setItem('currentUser', JSON.stringify(updatedUser))
+                                      if(localStorage.getItem('rememberUser') === '1') {
+                                        localStorage.setItem('currentUser', JSON.stringify(updatedUser))
+                                      }
+                                    } catch {}
+                                  } else {
+                                    alert('Please log in to manage your watchlist.')
+                                    return
+                                  }
+                                } catch (err: any) {
+                                  alert(`Error: ${err?.message || 'Unknown error'}`)
+                                  return
                                 }
+                              }
+                              
+                              if(!userId) {
+                                alert('Please log in to manage your watchlist.')
+                                return
+                              }
+                              
+                              setWatchlistLoading(true)
+                              try {
+                                const mediaType = detailData.media_type
+                                const targetType = mediaType === 'movie' ? 'movie' : 'show'
+                                const id = mediaType === 'movie' 
+                                  ? (detailData as MovieDetail).movie_id 
+                                  : (detailData as ShowDetail).show_id
                                 
+                                if(isInWatchlist) {
+                                  // Remove from watchlist
+                                  const result = await removeFromWatchlist(userId, targetType, id)
+                                  if(result.ok) {
+                                    setIsInWatchlist(false)
+                                    // Refresh profile data to update watchlist
+                                    if(profileData) {
+                                      const updatedProfile = { ...profileData }
+                                      if(mediaType === 'movie') {
+                                        updatedProfile.watchlist.movies = updatedProfile.watchlist.movies.filter(m => m.id !== id)
+                                      } else {
+                                        updatedProfile.watchlist.tv = updatedProfile.watchlist.tv.filter(t => t.id !== id)
+                                      }
+                                      setProfileData(updatedProfile)
+                                    }
+                                  } else {
+                                    alert(`Failed to remove from watchlist: ${result.error}`)
+                                  }
+                                } else {
+                                  // Add to watchlist
+                                  const result = await addToWatchlist(userId, targetType, id)
+                                  if(result.ok) {
+                                    setIsInWatchlist(true)
+                                    // Refresh profile data to update watchlist
+                                    if(profileData) {
+                                      const updatedProfile = { ...profileData }
+                                      const item = {
+                                        title: detailData.title,
+                                        media_type: mediaType,
+                                        id: id,
+                                        poster_path: detailData.poster_path || null
+                                      }
+                                      if(mediaType === 'movie') {
+                                        updatedProfile.watchlist.movies = [...updatedProfile.watchlist.movies, item]
+                                      } else {
+                                        updatedProfile.watchlist.tv = [...updatedProfile.watchlist.tv, item]
+                                      }
+                                      setProfileData(updatedProfile)
+                                    }
+                                  } else {
+                                    alert(`Failed to add to watchlist: ${result.error}`)
+                                  }
+                                }
+                              } catch (err: any) {
+                                alert(`Error: ${err?.message || 'Unknown error'}`)
+                              } finally {
+                                setWatchlistLoading(false)
+                              }
+                            }}
+                            disabled={watchlistLoading || detailLoading || !currentUser}
+                            style={{
+                              padding:'10px 20px',
+                              borderRadius:'8px',
+                              border:'1px solid rgba(255, 255, 255, 0.2)',
+                              background: isInWatchlist 
+                                ? 'rgba(59, 130, 246, 0.95)' 
+                                : 'rgba(20, 20, 28, 0.95)',
+                              color: isInWatchlist ? '#ffffff' : '#ffffff',
+                              cursor: watchlistLoading || detailLoading || !currentUser ? 'not-allowed' : 'pointer',
+                              fontWeight:600,
+                              fontSize:'14px',
+                              transition:'all 0.2s ease',
+                              opacity: watchlistLoading || detailLoading || !currentUser ? 0.6 : 1,
+                              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1)',
+                              backdropFilter: 'blur(8px)',
+                              WebkitBackdropFilter: 'blur(8px)'
+                            }}
+                          >
+                            {watchlistLoading ? '...' : (isInWatchlist ? '✓ In Watchlist' : '+ Add to Watchlist')}
+                          </button>
+                        )}
+                        {currentUser?.is_admin && (
+                          <button
+                            type="button"
+                            className={`detail-edit-button ${detailEditMode ? 'detail-edit-button-active' : ''}`}
+                            onClick={async () => {
+                              if(detailEditMode) {
+                                // Save changes
+                                if(!detailData) return
+                                setEditSaving(true)
+                                try {
+                                  const payload: UpdateMediaPayload = {
+                                    title: editTitle || undefined,
+                                    overview: editOverview || undefined,
+                                    language: editLanguage || undefined,
+                                    tmdb_score: editTmdbScore ? parseFloat(editTmdbScore) : undefined,
+                                    popularity: editPopularity ? parseFloat(editPopularity) : undefined,
+                                    genre: editGenre || undefined,
+                                  }
+                                  
+                                  if(detailData.media_type === 'movie') {
+                                    const movieDetail = detailData as MovieDetail
+                                    if(editYear) {
+                                      payload.release_year = parseInt(editYear)
+                                    }
+                                    const result = await updateMedia('movie', movieDetail.movie_id, payload)
+                                    if(!result.ok) {
+                                      alert(`Failed to update: ${result.error}`)
+                                      return
+                                    }
+                                  } else {
+                                    const showDetail = detailData as ShowDetail
+                                    if(editYear) {
+                                      payload.first_air_year = parseInt(editYear)
+                                    }
+                                    const result = await updateMedia('tv', showDetail.show_id, payload)
+                                    if(!result.ok) {
+                                      alert(`Failed to update: ${result.error}`)
+                                      return
+                                    }
+                                  }
+                                  
+                                  // Reload detail data
+                                  const mediaType = detailData.media_type
+                                  const id = mediaType === 'movie' ? (detailData as MovieDetail).movie_id : (detailData as ShowDetail).show_id
+                                  if(mediaType === 'movie') {
+                                    const data = await getMovieDetail(id)
+                                    setDetailData({ ...data, media_type: 'movie' })
+                                    setEditTitle(data.title || '')
+                                    setEditOverview(data.overview || '')
+                                    setEditLanguage(data.original_language || '')
+                                    setEditYear(data.release_year?.toString() || '')
+                                    setEditTmdbScore(data.vote_average?.toString() || '')
+                                    setEditPopularity(data.popularity?.toString() || '')
+                                    // Join all genres with comma and space
+                                    setEditGenre(data.genres?.join(', ') || '')
+                                  } else {
+                                    const data = await getShowDetail(id)
+                                    setDetailData({ ...data, media_type: 'tv' })
+                                    setEditTitle(data.title || '')
+                                    setEditOverview(data.overview || '')
+                                    setEditLanguage(data.original_language || '')
+                                    const yearMatch = data.first_air_date?.match(/^(\d{4})/)
+                                    setEditYear(yearMatch ? yearMatch[1] : '')
+                                    setEditTmdbScore(data.vote_average?.toString() || '')
+                                    setEditPopularity(data.popularity?.toString() || '')
+                                    // Join all genres with comma and space
+                                    setEditGenre(data.genres?.join(', ') || '')
+                                  }
+                                  setDetailEditMode(false)
+                                } catch (err: any) {
+                                  alert(`Error updating: ${err?.message || 'Unknown error'}`)
+                                } finally {
+                                  setEditSaving(false)
+                                }
+                              } else {
+                                // Enter edit mode - initialize fields from current data
+                                setEditTitle(detailData.title || '')
+                                setEditOverview(detailData.overview || '')
+                                setEditLanguage(detailData.original_language || '')
                                 if(detailData.media_type === 'movie') {
                                   const movieDetail = detailData as MovieDetail
-                                  if(editYear) {
-                                    payload.release_year = parseInt(editYear)
-                                  }
-                                  const result = await updateMedia('movie', movieDetail.movie_id, payload)
-                                  if(!result.ok) {
-                                    alert(`Failed to update: ${result.error}`)
-                                    return
-                                  }
+                                  setEditYear(movieDetail.release_year?.toString() || '')
                                 } else {
                                   const showDetail = detailData as ShowDetail
-                                  if(editYear) {
-                                    payload.first_air_year = parseInt(editYear)
-                                  }
-                                  const result = await updateMedia('tv', showDetail.show_id, payload)
-                                  if(!result.ok) {
-                                    alert(`Failed to update: ${result.error}`)
-                                    return
-                                  }
-                                }
-                                
-                                // Reload detail data
-                                const mediaType = detailData.media_type
-                                const id = mediaType === 'movie' ? (detailData as MovieDetail).movie_id : (detailData as ShowDetail).show_id
-                                if(mediaType === 'movie') {
-                                  const data = await getMovieDetail(id)
-                                  setDetailData({ ...data, media_type: 'movie' })
-                                  setEditTitle(data.title || '')
-                                  setEditOverview(data.overview || '')
-                                  setEditLanguage(data.original_language || '')
-                                  setEditYear(data.release_year?.toString() || '')
-                                  setEditTmdbScore(data.vote_average?.toString() || '')
-                                  setEditPopularity(data.popularity?.toString() || '')
-                                  // Join all genres with comma and space
-                                  setEditGenre(data.genres?.join(', ') || '')
-                                } else {
-                                  const data = await getShowDetail(id)
-                                  setDetailData({ ...data, media_type: 'tv' })
-                                  setEditTitle(data.title || '')
-                                  setEditOverview(data.overview || '')
-                                  setEditLanguage(data.original_language || '')
-                                  const yearMatch = data.first_air_date?.match(/^(\d{4})/)
+                                  const yearMatch = showDetail.first_air_date?.match(/^(\d{4})/)
                                   setEditYear(yearMatch ? yearMatch[1] : '')
-                                  setEditTmdbScore(data.vote_average?.toString() || '')
-                                  setEditPopularity(data.popularity?.toString() || '')
-                                  // Join all genres with comma and space
-                                  setEditGenre(data.genres?.join(', ') || '')
                                 }
-                                setDetailEditMode(false)
-                              } catch (err: any) {
-                                alert(`Error updating: ${err?.message || 'Unknown error'}`)
-                              } finally {
-                                setEditSaving(false)
+                                setEditTmdbScore(detailData.vote_average?.toString() || '')
+                                setEditPopularity(detailData.popularity?.toString() || '')
+                                // Join all genres with comma and space
+                                setEditGenre(detailData.genres?.join(', ') || '')
+                                setDetailEditMode(true)
                               }
-                            } else {
-                              // Enter edit mode - initialize fields from current data
-                              setEditTitle(detailData.title || '')
-                              setEditOverview(detailData.overview || '')
-                              setEditLanguage(detailData.original_language || '')
-                              if(detailData.media_type === 'movie') {
-                                const movieDetail = detailData as MovieDetail
-                                setEditYear(movieDetail.release_year?.toString() || '')
-                              } else {
-                                const showDetail = detailData as ShowDetail
-                                const yearMatch = showDetail.first_air_date?.match(/^(\d{4})/)
-                                setEditYear(yearMatch ? yearMatch[1] : '')
-                              }
-                              setEditTmdbScore(detailData.vote_average?.toString() || '')
-                              setEditPopularity(detailData.popularity?.toString() || '')
-                              // Join all genres with comma and space
-                              setEditGenre(detailData.genres?.join(', ') || '')
-                              setDetailEditMode(true)
-                            }
-                          }}
-                          disabled={editSaving || detailLoading}
-                        >
-                          {detailEditMode ? (editSaving ? 'Saving...' : 'Save') : 'Edit'}
-                        </button>
-                      )}
+                            }}
+                            disabled={editSaving || detailLoading}
+                          >
+                            {detailEditMode ? (editSaving ? 'Saving...' : 'Save') : 'Edit'}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
 
