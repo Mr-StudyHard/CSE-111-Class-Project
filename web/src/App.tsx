@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, type Review, getUserByEmail, setAuthToken, clearAuthToken, getUserSettings, updateUserSettings, type UserSettings, getUserProfile, type UserProfile, deleteUserAccount, addToWatchlist, removeFromWatchlist } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, updateReview, deleteReview, type Review, getUserByEmail, setAuthToken, clearAuthToken, getUserSettings, updateUserSettings, type UserSettings, getUserProfile, type UserProfile, deleteUserAccount, addToWatchlist, removeFromWatchlist, addToFavorites, removeFromFavorites, checkFavorite, getTopRatedMovies, getTopRatedShows, getGenreDistribution, type TopRatedItem, type GenreDistribution, getPopularWatchlists, getUnreviewedTitles, getActiveReviewers, getGenreRatings, type PopularWatchlistItem, type UnreviewedItem, type ActiveReviewer, type GenreRating, getPublicUserProfile, type PublicUserProfile, addReviewReaction, getReviewReactions } from './api'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
 type ReleaseFilter = 'all' | 'movie' | 'tv'
 
@@ -133,6 +133,7 @@ export default function App() {
     if (path === '/settings') return 'settings'
     if (path === '/add') return 'add'
     if (path.startsWith('/movie/') || path.startsWith('/show/')) return 'detail'
+    if (path.startsWith('/user/')) return 'public-profile'
     return 'app'
   }
   
@@ -236,6 +237,7 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const accountMenuRef = useRef<HTMLDivElement | null>(null)
   const detailRequestId = useRef(0)
+  const lastLoadedUserIdRef = useRef<number | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [detailData, setDetailData] = useState<MovieDetail | ShowDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -252,9 +254,47 @@ export default function App() {
   const [reviews, setReviews] = useState<Review[]>([])
   const [reviewsLoading, setReviewsLoading] = useState(false)
   const [reviewText, setReviewText] = useState('')
+  const [reviewRating, setReviewRating] = useState<number | undefined>(undefined)
   const [reviewSubmitting, setReviewSubmitting] = useState(false)
+  const [editingReviewId, setEditingReviewId] = useState<number | null>(null)
+  const [editReviewText, setEditReviewText] = useState('')
+  const [editReviewRating, setEditReviewRating] = useState<number | undefined>(undefined)
   const [isInWatchlist, setIsInWatchlist] = useState(false)
   const [watchlistLoading, setWatchlistLoading] = useState(false)
+  const [isFavorite, setIsFavorite] = useState(false)
+  const [favoriteLoading, setFavoriteLoading] = useState(false)
+  const [userReactions, setUserReactions] = useState<Record<number, string[]>>({}) // review_id -> emote_types[]
+  // Cast carousel state
+  const CAST_PAGE_SIZE = 6
+  const [castPage, setCastPage] = useState(0)
+  const [castSlideDirection, setCastSlideDirection] = useState<'left' | 'right' | 'none'>('none')
+  const [castTransitionType, setCastTransitionType] = useState<'slide' | 'none'>('none')
+  
+  // Analytics state
+  const [topMovies, setTopMovies] = useState<TopRatedItem[]>([])
+  const [topShows, setTopShows] = useState<TopRatedItem[]>([])
+  const [genreDistribution, setGenreDistribution] = useState<GenreDistribution[]>([])
+  const [genreDistributionType, setGenreDistributionType] = useState<'movie' | 'show'>('movie')
+  const [analyticsLoading, setAnalyticsLoading] = useState(false)
+  const [popularWatchlists, setPopularWatchlists] = useState<PopularWatchlistItem[]>([])
+  const [unreviewedTitles, setUnreviewedTitles] = useState<UnreviewedItem[]>([])
+  const [activeReviewers, setActiveReviewers] = useState<ActiveReviewer[]>([])
+  const [genreRatings, setGenreRatings] = useState<GenreRating[]>([])
+  const [genreRatingsType, setGenreRatingsType] = useState<'movie' | 'show'>('movie')
+  
+  // User profile modal state
+  const [viewingUserProfile, setViewingUserProfile] = useState<PublicUserProfile | null>(null)
+  const [userProfileLoading, setUserProfileLoading] = useState(false)
+  const [userProfileError, setUserProfileError] = useState<string | null>(null)
+  
+  // Public profile favorites pagination state
+  const [publicMovieFavPage, setPublicMovieFavPage] = useState(0)
+  const [publicTvFavPage, setPublicTvFavPage] = useState(0)
+  const [publicMovieFavTransitionType, setPublicMovieFavTransitionType] = useState<'none' | 'slide' | 'fade'>('none')
+  const [publicTvFavTransitionType, setPublicTvFavTransitionType] = useState<'none' | 'slide' | 'fade'>('none')
+  const [publicMovieFavSlideDirection, setPublicMovieFavSlideDirection] = useState<'left' | 'right'>('left')
+  const [publicTvFavSlideDirection, setPublicTvFavSlideDirection] = useState<'left' | 'right'>('left')
+  
   const [moviesAnimationKey, setMoviesAnimationKey] = useState(0)
   const [tvAnimationKey, setTvAnimationKey] = useState(0)
   const moviesRequestId = useRef(0)
@@ -312,6 +352,9 @@ export default function App() {
   // Watchlist expand/collapse state
   const [movieWatchlistExpanded, setMovieWatchlistExpanded] = useState(false)
   const [tvWatchlistExpanded, setTvWatchlistExpanded] = useState(false)
+  // Public profile watchlist expand/collapse state
+  const [publicMovieWatchlistExpanded, setPublicMovieWatchlistExpanded] = useState(false)
+  const [publicTvWatchlistExpanded, setPublicTvWatchlistExpanded] = useState(false)
   const primaryNav = [
     { id: 'analytics', label: 'Analytics' },
     { id: 'movies', label: 'Movies' },
@@ -345,8 +388,14 @@ export default function App() {
       setView('accounts')
     } else if (path === '/add') {
       setView('add')
-    } else if (path.startsWith('/movie/') || path.startsWith('/show/')) {
+    } else if (path.startsWith('/movie/') || path.startsWith('/show/') || path.startsWith('/tv/')) {
       setView('detail')
+    } else if (path.startsWith('/user/')) {
+      setView('public-profile')
+    } else if (path === '/profile') {
+      setView('profile')
+    } else if (path === '/settings') {
+      setView('settings')
     }
   }, [location.pathname])
 
@@ -567,6 +616,77 @@ export default function App() {
       setUsername('')
       setEmail('')
       setPassword('')
+    }
+  }, [view])
+
+  // Load public user profile when viewing another user's profile
+  useEffect(() => {
+    // Check if we're on a public profile route
+    const path = location.pathname
+    const match = path.match(/^\/user\/(\d+)/)
+    const isPublicProfileRoute = match !== null
+    
+    // If not on public profile route, clear the profile data
+    if (!isPublicProfileRoute) {
+      setViewingUserProfile(null)
+      setUserProfileLoading(false)
+      setUserProfileError(null)
+      setPublicMovieFavPage(0)
+      setPublicTvFavPage(0)
+      setPublicMovieWatchlistExpanded(false)
+      setPublicTvWatchlistExpanded(false)
+      lastLoadedUserIdRef.current = null
+      return
+    }
+    
+    const userId = parseInt(match[1], 10)
+    if (isNaN(userId) || userId <= 0) {
+      setUserProfileError('Invalid user ID')
+      setUserProfileLoading(false)
+      return
+    }
+    
+    // Check if we already have this user's profile loaded (avoid unnecessary reloads)
+    if (lastLoadedUserIdRef.current === userId && viewingUserProfile?.user?.user_id === userId) {
+      // Already loaded the correct user, no need to reload
+      return
+    }
+    
+    // Load profile data when on the route
+    // Don't wait for view state - load directly based on URL
+    setUserProfileLoading(true)
+    setUserProfileError(null)
+    setViewingUserProfile(null)
+    lastLoadedUserIdRef.current = userId
+    // Reset pagination and expanded state when viewing different user
+    setPublicMovieFavPage(0)
+    setPublicTvFavPage(0)
+    setPublicMovieWatchlistExpanded(false)
+    setPublicTvWatchlistExpanded(false)
+    
+    getPublicUserProfile(userId).then(result => {
+      // Double-check we're still on the same route (avoid race conditions)
+      const currentPath = window.location.pathname
+      const currentMatch = currentPath.match(/^\/user\/(\d+)/)
+      if (currentMatch && parseInt(currentMatch[1], 10) === userId) {
+        if (result.ok && 'user' in result) {
+          setViewingUserProfile(result as PublicUserProfile)
+        } else {
+          setUserProfileError((result as { error?: string }).error || 'User not found')
+        }
+      }
+    }).catch((err) => {
+      console.error('Failed to load public profile:', err)
+      setUserProfileError('Failed to load profile')
+    }).finally(() => {
+      setUserProfileLoading(false)
+    })
+  }, [location.pathname])
+
+  // Scroll to top when profile view is opened
+  useEffect(() => {
+    if (view === 'profile') {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
     }
   }, [view])
 
@@ -909,6 +1029,17 @@ export default function App() {
     }
   }, [tvFavSlideDirection])
 
+  // Reset cast carousel slide direction
+  useEffect(() => {
+    if (castSlideDirection !== 'none') {
+      const timer = setTimeout(() => {
+        setCastSlideDirection('none')
+        setCastTransitionType('none')
+      }, 400)
+      return () => clearTimeout(timer)
+    }
+  }, [castSlideDirection])
+
 
   // Calculate carousel pages for favorites (always call hooks, even if not in profile view)
   const movieFavorites = profileData?.favorites?.movies || []
@@ -940,6 +1071,59 @@ export default function App() {
     const end = start + FAVORITES_PAGE_SIZE
     return tvFavorites.slice(start, end)
   }, [tvFavorites, tvFavPage, tvFavTotalPages])
+
+  // Public profile favorites calculations
+  const publicMovieFavorites = viewingUserProfile?.favorites?.filter(f => f.media_type === 'movie') || []
+  const publicTvFavorites = viewingUserProfile?.favorites?.filter(f => f.media_type === 'tv') || []
+  const publicMovieFavTotalPages = useMemo(() => {
+    if(publicMovieFavorites.length === 0) return 0
+    return Math.ceil(publicMovieFavorites.length / FAVORITES_PAGE_SIZE)
+  }, [publicMovieFavorites.length])
+
+  const displayedPublicMovieFavorites = useMemo(() => {
+    if(publicMovieFavorites.length === 0) return []
+    const clampedPage = Math.min(publicMovieFavPage, Math.max(0, publicMovieFavTotalPages - 1))
+    const start = clampedPage * FAVORITES_PAGE_SIZE
+    const end = start + FAVORITES_PAGE_SIZE
+    return publicMovieFavorites.slice(start, end)
+  }, [publicMovieFavorites, publicMovieFavPage, publicMovieFavTotalPages])
+
+  const publicTvFavTotalPages = useMemo(() => {
+    if(publicTvFavorites.length === 0) return 0
+    return Math.ceil(publicTvFavorites.length / FAVORITES_PAGE_SIZE)
+  }, [publicTvFavorites.length])
+
+  const displayedPublicTvFavorites = useMemo(() => {
+    if(publicTvFavorites.length === 0) return []
+    const clampedPage = Math.min(publicTvFavPage, Math.max(0, publicTvFavTotalPages - 1))
+    const start = clampedPage * FAVORITES_PAGE_SIZE
+    const end = start + FAVORITES_PAGE_SIZE
+    return publicTvFavorites.slice(start, end)
+  }, [publicTvFavorites, publicTvFavPage, publicTvFavTotalPages])
+
+  // Public profile watchlist
+  const publicMovieWatchlist = viewingUserProfile?.watchlist?.movies || []
+  const publicTvWatchlist = viewingUserProfile?.watchlist?.tv || []
+
+  // Cast carousel logic
+  const cast = detailData?.top_cast || []
+  const castTotalPages = useMemo(() => {
+    if(cast.length === 0) return 0
+    return Math.ceil(cast.length / CAST_PAGE_SIZE)
+  }, [cast.length])
+
+  const displayedCast = useMemo(() => {
+    if(cast.length === 0) return []
+    const clampedPage = Math.min(castPage, Math.max(0, castTotalPages - 1))
+    const start = clampedPage * CAST_PAGE_SIZE
+    const end = start + CAST_PAGE_SIZE
+    return cast.slice(start, end)
+  }, [cast, castPage, castTotalPages])
+
+  // Reset cast page when detail data changes
+  useEffect(() => {
+    setCastPage(0)
+  }, [detailData?.movie_id, detailData?.show_id])
 
 
   // Reset fade state and transition type after fade completes
@@ -1161,6 +1345,73 @@ export default function App() {
       setBusy(false)
     }
   }
+
+  function openUserProfile(userId: number) {
+    // If clicking on own profile, go to private profile page
+    if (currentUser && currentUser.user_id === userId) {
+      navigate('/profile')
+      // View will be set by URL sync useEffect
+      return
+    }
+    // Otherwise, navigate to public profile page
+    navigate(`/user/${userId}`)
+    // View will be set by URL sync useEffect
+  }
+
+  async function loadAnalyticsData() {
+    setAnalyticsLoading(true)
+    try {
+      const [moviesRes, showsRes, genreRes, watchlistsRes, unreviewedRes, reviewersRes] = await Promise.all([
+        getTopRatedMovies(10),
+        getTopRatedShows(10),
+        getGenreDistribution(genreDistributionType),
+        getPopularWatchlists(10),
+        getUnreviewedTitles('all', 12),
+        getActiveReviewers(1, 10)
+      ])
+      setTopMovies(moviesRes.results)
+      setTopShows(showsRes.results)
+      setGenreDistribution(genreRes.results)
+      setPopularWatchlists(watchlistsRes.results)
+      setUnreviewedTitles(unreviewedRes.results)
+      setActiveReviewers(reviewersRes.results)
+      
+      // Load genre ratings if admin
+      if (currentUser?.is_admin) {
+        const genreRatingsRes = await getGenreRatings(genreRatingsType)
+        setGenreRatings(genreRatingsRes.results)
+      }
+    } catch (err) {
+      console.error('Failed to load analytics:', err)
+    } finally {
+      setAnalyticsLoading(false)
+    }
+  }
+
+  // Load analytics data when analytics tab is active
+  useEffect(() => {
+    if (tab === 'analytics') {
+      loadAnalyticsData()
+    }
+  }, [tab])
+
+  // Load genre distribution when type changes
+  useEffect(() => {
+    if (tab === 'analytics') {
+      getGenreDistribution(genreDistributionType).then(res => {
+        setGenreDistribution(res.results)
+      })
+    }
+  }, [genreDistributionType])
+
+  // Load genre ratings when type changes (admin only)
+  useEffect(() => {
+    if (tab === 'analytics' && currentUser?.is_admin) {
+      getGenreRatings(genreRatingsType).then(res => {
+        setGenreRatings(res.results)
+      })
+    }
+  }, [genreRatingsType, currentUser?.is_admin])
 
   async function loadNewReleases(limit = NEW_RELEASE_FETCH_LIMIT, filter: ReleaseFilter = newReleaseFilter){
     const requestId = ++newReleasesRequestId.current
@@ -1445,10 +1696,16 @@ export default function App() {
   }, [view])
 
   useEffect(() => {
+    // Only load detail data when view is 'detail'
+    // The view state is managed by the URL sync useEffect above
     if(view !== 'detail'){
+      // Clear detail data when not on detail view
       setDetailLoading(false)
+      setDetailData(null)
+      setDetailError(null)
       return
     }
+    
     const segments = location.pathname.split('/').filter(Boolean)
     if(segments.length < 2){
       setDetailError('Details unavailable for this route.')
@@ -1503,6 +1760,19 @@ export default function App() {
             const reviewsData = await getReviews('movie', numericId)
             if(requestId === detailRequestId.current){
               setReviews(reviewsData.reviews || [])
+              // Load user reactions for each review
+              const reactionsMap: Record<number, string[]> = {}
+              if(currentUser){
+                for(const review of reviewsData.reviews || []){
+                  try {
+                    const reactionData = await getReviewReactions(review.review_id)
+                    if(reactionData.ok && reactionData.user_reactions){
+                      reactionsMap[review.review_id] = reactionData.user_reactions
+                    }
+                  } catch {}
+                }
+              }
+              setUserReactions(reactionsMap)
               setReviewsLoading(false)
             }
           }
@@ -1526,6 +1796,19 @@ export default function App() {
             const reviewsData = await getReviews('show', numericId)
             if(requestId === detailRequestId.current){
               setReviews(reviewsData.reviews || [])
+              // Load user reactions for each review
+              const reactionsMap: Record<number, string[]> = {}
+              if(currentUser){
+                for(const review of reviewsData.reviews || []){
+                  try {
+                    const reactionData = await getReviewReactions(review.review_id)
+                    if(reactionData.ok && reactionData.user_reactions){
+                      reactionsMap[review.review_id] = reactionData.user_reactions
+                    }
+                  } catch {}
+                }
+              }
+              setUserReactions(reactionsMap)
               setReviewsLoading(false)
             }
           }
@@ -1542,7 +1825,7 @@ export default function App() {
         }
       }
     })()
-  }, [view, location.pathname])
+  }, [view, location.pathname, currentUser])
 
   // Check watchlist status when detail data or profile data changes
   useEffect(() => {
@@ -1563,6 +1846,34 @@ export default function App() {
       setIsInWatchlist(false)
     }
   }, [detailData, currentUser, profileData])
+
+  // Check favorite status when detail data or current user changes
+  useEffect(() => {
+    const checkFavoriteStatus = async () => {
+      if (detailData && currentUser?.user_id) {
+        const mediaType = detailData.media_type
+        const id = mediaType === 'movie' 
+          ? (detailData as MovieDetail).movie_id 
+          : (detailData as ShowDetail).show_id
+        
+        const targetType = mediaType === 'movie' ? 'movie' : 'show'
+        
+        try {
+          const result = await checkFavorite(currentUser.user_id, targetType, id)
+          if (result.ok) {
+            setIsFavorite(result.is_favorited)
+          }
+        } catch (err) {
+          console.error('Failed to check favorite status:', err)
+          setIsFavorite(false)
+        }
+      } else {
+        setIsFavorite(false)
+      }
+    }
+    
+    checkFavoriteStatus()
+  }, [detailData, currentUser])
 
   if(view === 'login'){
     const onSubmit = async (ev: React.FormEvent) => {
@@ -1935,6 +2246,774 @@ export default function App() {
     )
   }
 
+  // ============================================================================
+  // PUBLIC USER PROFILE VIEW
+  // ============================================================================
+  if(view === 'public-profile'){
+    const publicUser = viewingUserProfile?.user
+    const publicStats = viewingUserProfile?.stats
+    const displayName = publicUser?.display_name || 'User'
+
+    return (
+      <div className="container">
+        <header className="header">
+          <div className="header-left">
+            <div className="brand-group">
+              <button type="button" className="brand-link" onClick={()=>{ navigateToTab('home'); }}>
+                PlotSignal
+              </button>
+            </div>
+            {renderSearchField()}
+            <button
+              type="button"
+              className="search-toggle"
+              aria-label="Toggle search"
+              aria-expanded={mobileSearchOpen}
+              onClick={()=>setMobileSearchOpen(prev => !prev)}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <circle cx="11" cy="11" r="6" />
+                <line x1="15.5" y1="15.5" x2="21" y2="21" />
+              </svg>
+            </button>
+          </div>
+          <div className="header-right">
+            <nav className="header-nav" aria-label="Primary navigation">
+              {primaryNav.map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={()=>navigateToTab(item.id)}
+                  aria-current={tab === item.id ? 'page' : undefined}
+                  className={`nav-pill ${tab === item.id ? 'active' : ''}`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+            <div className="header-actions">
+              {renderAccountControls()}
+            </div>
+          </div>
+        </header>
+
+        {userProfileLoading ? (
+          <div style={{textAlign:'center', padding:'80px 20px', color:'var(--muted)'}}>
+            Loading profile...
+          </div>
+        ) : userProfileError ? (
+          <div style={{textAlign:'center', padding:'80px 20px'}}>
+            <div style={{fontSize:'48px', marginBottom:'16px'}}>😕</div>
+            <div style={{color:'#ef5350', fontSize:'18px', marginBottom:'12px'}}>{userProfileError}</div>
+            <button className="btn-primary" onClick={() => navigateToTab('home')}>
+              Go Home
+            </button>
+          </div>
+        ) : viewingUserProfile ? (
+          <>
+            {/* Profile Hero Section */}
+            <div style={{
+              background:'linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(11, 11, 15, 0.95) 100%)',
+              border:'1px solid rgba(99, 102, 241, 0.25)',
+              borderRadius:'20px',
+              padding:'40px 32px',
+              marginBottom:'32px',
+              position:'relative',
+              overflow:'hidden'
+            }}>
+              <div style={{position:'relative', zIndex:1, display:'flex', alignItems:'center', gap:'24px'}}>
+                <div className="avatar-circle" style={{width:80, height:80, fontSize:'32px', background:'linear-gradient(135deg, #6366f1, #8b5cf6)'}}>
+                  <span className="avatar-initials">
+                    {displayName.split(/\s+/).slice(0,2).map(n=>n.charAt(0).toUpperCase()).join('') || '👤'}
+                  </span>
+                </div>
+                <div style={{flex:1}}>
+                  <h1 style={{margin:0, fontSize:'36px', fontWeight:800, color:'var(--text)', marginBottom:'8px'}}>
+                    {displayName}
+                  </h1>
+                  <div style={{display:'flex', gap:'24px', alignItems:'center', flexWrap:'wrap'}}>
+                    {publicUser?.created_at && (
+                      <div style={{color:'var(--muted)', fontSize:'14px'}}>
+                        Member since {new Date(publicUser.created_at).toLocaleDateString('en-US', { month:'long', year:'numeric' })}
+                      </div>
+                    )}
+                    <div style={{color:'var(--muted)', fontSize:'14px'}}>
+                      {publicStats?.total_reviews || 0} reviews
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Stats Section - Separated by Movies and TV - Same format as private profile */}
+            {userProfileLoading ? (
+              <div style={{textAlign:'center', padding:'60px 20px', color:'var(--muted)'}}>Loading profile...</div>
+            ) : userProfileError ? (
+              <div style={{textAlign:'center', padding:'60px 20px', color:'#ef5350'}}>{userProfileError}</div>
+            ) : publicStats ? (
+              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'24px', marginBottom:'40px'}}>
+                {/* Movies Stats */}
+                <div style={{
+                  background:'rgba(20, 20, 28, 0.95)',
+                  border:'1px solid rgba(229, 9, 20, 0.2)',
+                  borderRadius:'20px',
+                  padding:'32px',
+                  position:'relative',
+                  overflow:'hidden'
+                }}>
+                  <div style={{
+                    position:'absolute',
+                    top:0,
+                    right:0,
+                    width:200,
+                    height:200,
+                    background:'radial-gradient(circle, rgba(229, 9, 20, 0.15) 0%, transparent 70%)',
+                    opacity:0.6
+                  }}></div>
+                  <div style={{position:'relative', zIndex:1}}>
+                    <div style={{display:'flex', alignItems:'center', gap:'12px', marginBottom:'24px'}}>
+                      <div style={{fontSize:'24px'}}>🎬</div>
+                      <h2 style={{margin:0, fontSize:'22px', fontWeight:700, color:'var(--text)'}}>Movies</h2>
+                    </div>
+                    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px'}}>
+                      <div>
+                        <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Reviews</div>
+                        <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>{publicStats.movie_reviews}</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Avg Rating</div>
+                        <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>
+                          {publicStats.movie_avg_rating?.toFixed(1) || '0.0'}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Hours Watched</div>
+                        <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>{publicStats.movie_reviews * 2}</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Discussion Posts</div>
+                        <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>0</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* TV Stats */}
+                <div style={{
+                  background:'rgba(20, 20, 28, 0.95)',
+                  border:'1px solid rgba(37, 99, 235, 0.2)',
+                  borderRadius:'20px',
+                  padding:'32px',
+                  position:'relative',
+                  overflow:'hidden'
+                }}>
+                  <div style={{
+                    position:'absolute',
+                    top:0,
+                    right:0,
+                    width:200,
+                    height:200,
+                    background:'radial-gradient(circle, rgba(37, 99, 235, 0.15) 0%, transparent 70%)',
+                    opacity:0.6
+                  }}></div>
+                  <div style={{position:'relative', zIndex:1}}>
+                    <div style={{display:'flex', alignItems:'center', gap:'12px', marginBottom:'24px'}}>
+                      <div style={{fontSize:'24px'}}>📺</div>
+                      <h2 style={{margin:0, fontSize:'22px', fontWeight:700, color:'var(--text)'}}>TV Shows</h2>
+                    </div>
+                    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px'}}>
+                      <div>
+                        <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Reviews</div>
+                        <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>{publicStats.tv_reviews}</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Avg Rating</div>
+                        <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>
+                          {publicStats.tv_avg_rating?.toFixed(1) || '0.0'}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Hours Watched</div>
+                        <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>{publicStats.tv_reviews * 2}</div>
+                      </div>
+                      <div>
+                        <div style={{fontSize:'12px', color:'var(--muted)', marginBottom:'6px', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.5px'}}>Discussion Posts</div>
+                        <div style={{fontSize:'36px', fontWeight:800, color:'var(--text)', lineHeight:1}}>0</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Favorites Section - Same format as private profile */}
+            <div style={{marginBottom:'40px'}}>
+              <h2 style={{margin:0, marginBottom:'32px', fontSize:'24px', fontWeight:700, color:'var(--text)'}}>
+                {displayName}'s Favorites
+              </h2>
+              
+              {/* Movie Favorites Carousel */}
+              <div style={{marginBottom:'40px'}}>
+                <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
+                  <h3 style={{margin:0, fontSize:'20px', fontWeight:600, color:'var(--text)', display:'flex', alignItems:'center', gap:'10px'}}>
+                    <span style={{fontSize:'24px'}}>🎬</span> Movies
+                  </h3>
+                  {publicMovieFavorites.length > 0 && (
+                    <div style={{fontSize:'14px', color:'var(--muted)'}}>
+                      {publicMovieFavorites.length} {publicMovieFavorites.length === 1 ? 'item' : 'items'}
+                      {publicMovieFavTotalPages > 1 && ` • Page ${publicMovieFavPage + 1} of ${publicMovieFavTotalPages}`}
+                    </div>
+                  )}
+                </div>
+                {userProfileLoading ? (
+                  <p style={{color:'var(--muted)', textAlign:'center', padding:'40px'}}>Loading...</p>
+                ) : publicMovieFavorites.length === 0 ? (
+                  <div style={{
+                    padding:'60px 20px',
+                    textAlign:'center',
+                    background:'rgba(20, 20, 28, 0.95)',
+                    border:'1px solid rgba(255, 255, 255, 0.08)',
+                    borderRadius:'16px'
+                  }}>
+                    <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>🎬</div>
+                    <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No movie favorites yet.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className={`new-release-grid-wrapper ${publicMovieFavTransitionType === 'fade' ? `new-release-grid-wrapper-visible` : ''}`} style={{position:'relative', minHeight:'300px'}}>
+                      <div className={`new-release-grid ${publicMovieFavTransitionType === 'slide' ? `new-release-grid-slide-${publicMovieFavSlideDirection}` : ''}`} style={{display:'grid', gap:'14px', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', alignContent:'start'}}>
+                        {displayedPublicMovieFavorites.map((fav, idx) => (
+                          <Card
+                            key={`public-movie-fav-${fav.id}-${idx}`}
+                            item={{
+                              id: fav.id,
+                              tmdb_id: fav.id || 0,
+                              media_type: 'movie',
+                              title: fav.title,
+                              poster_path: fav.poster_path || undefined,
+                              vote_average: fav.rating || undefined
+                            } as MediaItem}
+                            onClick={() => {
+                              if(fav.id) {
+                                navigateToDetail('movie', fav.id)
+                              }
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    {publicMovieFavTotalPages > 1 && (
+                      <div className="pagination-controls" style={{marginTop:'20px'}} aria-label="Movie favorites pagination">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPublicMovieFavTransitionType('slide')
+                            setPublicMovieFavSlideDirection('right')
+                            setPublicMovieFavPage(prev => Math.max(0, prev - 1))
+                          }}
+                          disabled={userProfileLoading || publicMovieFavPage === 0}
+                        >
+                          ‹ Previous
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPublicMovieFavTransitionType('slide')
+                            setPublicMovieFavSlideDirection('left')
+                            setPublicMovieFavPage(prev => Math.min(publicMovieFavTotalPages - 1, prev + 1))
+                          }}
+                          disabled={userProfileLoading || publicMovieFavPage >= publicMovieFavTotalPages - 1}
+                        >
+                          Next ›
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {/* TV Favorites Carousel */}
+              <div>
+                <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
+                  <h3 style={{margin:0, fontSize:'20px', fontWeight:600, color:'var(--text)', display:'flex', alignItems:'center', gap:'10px'}}>
+                    <span style={{fontSize:'24px'}}>📺</span> TV Shows
+                  </h3>
+                  {publicTvFavorites.length > 0 && (
+                    <div style={{fontSize:'14px', color:'var(--muted)'}}>
+                      {publicTvFavorites.length} {publicTvFavorites.length === 1 ? 'item' : 'items'}
+                      {publicTvFavTotalPages > 1 && ` • Page ${publicTvFavPage + 1} of ${publicTvFavTotalPages}`}
+                    </div>
+                  )}
+                </div>
+                {userProfileLoading ? (
+                  <p style={{color:'var(--muted)', textAlign:'center', padding:'40px'}}>Loading...</p>
+                ) : publicTvFavorites.length === 0 ? (
+                  <div style={{
+                    padding:'60px 20px',
+                    textAlign:'center',
+                    background:'rgba(20, 20, 28, 0.95)',
+                    border:'1px solid rgba(255, 255, 255, 0.08)',
+                    borderRadius:'16px'
+                  }}>
+                    <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>📺</div>
+                    <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No TV favorites yet.</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className={`new-release-grid-wrapper ${publicTvFavTransitionType === 'fade' ? `new-release-grid-wrapper-visible` : ''}`} style={{position:'relative', minHeight:'300px'}}>
+                      <div className={`new-release-grid ${publicTvFavTransitionType === 'slide' ? `new-release-grid-slide-${publicTvFavSlideDirection}` : ''}`} style={{display:'grid', gap:'14px', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', alignContent:'start'}}>
+                        {displayedPublicTvFavorites.map((fav, idx) => (
+                          <Card
+                            key={`public-tv-fav-${fav.id}-${idx}`}
+                            item={{
+                              id: fav.id,
+                              tmdb_id: fav.id || 0,
+                              media_type: 'tv',
+                              title: fav.title,
+                              poster_path: fav.poster_path || undefined,
+                              vote_average: fav.rating || undefined
+                            } as MediaItem}
+                            onClick={() => {
+                              if(fav.id) {
+                                navigateToDetail('tv', fav.id)
+                              }
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    {publicTvFavTotalPages > 1 && (
+                      <div className="pagination-controls" style={{marginTop:'20px'}} aria-label="TV favorites pagination">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPublicTvFavTransitionType('slide')
+                            setPublicTvFavSlideDirection('right')
+                            setPublicTvFavPage(prev => Math.max(0, prev - 1))
+                          }}
+                          disabled={userProfileLoading || publicTvFavPage === 0}
+                        >
+                          ‹ Previous
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPublicTvFavTransitionType('slide')
+                            setPublicTvFavSlideDirection('left')
+                            setPublicTvFavPage(prev => Math.min(publicTvFavTotalPages - 1, prev + 1))
+                          }}
+                          disabled={userProfileLoading || publicTvFavPage >= publicTvFavTotalPages - 1}
+                        >
+                          Next ›
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Recent Reviews Section */}
+            {viewingUserProfile.recent_reviews && viewingUserProfile.recent_reviews.length > 0 && (
+              <div style={{marginBottom:'40px'}}>
+                <h2 style={{margin:0, marginBottom:'24px', fontSize:'24px', fontWeight:700, color:'var(--text)'}}>
+                  📝 Recent Reviews
+                </h2>
+                <div style={{display:'flex', flexDirection:'column', gap:'16px'}}>
+                  {viewingUserProfile.recent_reviews.map((review, idx) => (
+                    <div
+                      key={`review-${review.review_id}-${idx}`}
+                      style={{
+                        background:'rgba(20, 20, 28, 0.95)',
+                        border:'1px solid rgba(255,255,255,0.08)',
+                        borderRadius:'12px',
+                        padding:'20px',
+                        display:'flex',
+                        gap:'16px'
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => navigateToDetail(review.media_type, review.id)}
+                        style={{
+                          width:'120px',
+                          minWidth:'120px',
+                          aspectRatio:'2/3',
+                          borderRadius:'8px',
+                          overflow:'hidden',
+                          background:'rgba(255,255,255,0.05)',
+                          flexShrink:0,
+                          border:'none',
+                          cursor:'pointer',
+                          display:'flex',
+                          alignItems:'center',
+                          justifyContent:'center',
+                          padding:0
+                        }}
+                      >
+                        {review.poster_path ? (
+                          <img
+                            src={getImageUrl(review.poster_path, 'w185')}
+                            alt={review.title}
+                            style={{
+                              maxWidth:'100%',
+                              maxHeight:'100%',
+                              width:'auto',
+                              height:'auto',
+                              objectFit:'contain',
+                              display:'block',
+                              margin:'auto'
+                            }}
+                          />
+                        ) : (
+                          <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--muted)', fontSize:'12px'}}>
+                            ?
+                          </div>
+                        )}
+                      </button>
+                      <div style={{flex:1, minWidth:0}}>
+                        <button
+                          type="button"
+                          onClick={() => navigateToDetail(review.media_type, review.id)}
+                          style={{
+                            fontSize:'16px',
+                            fontWeight:600,
+                            color:'var(--accent)',
+                            marginBottom:'8px',
+                            display:'block',
+                            background:'none',
+                            border:'none',
+                            padding:0,
+                            cursor:'pointer',
+                            textAlign:'left'
+                          }}
+                        >
+                          {review.media_type === 'movie' ? '🎬' : '📺'} {review.title}
+                        </button>
+                        {review.rating !== null && (
+                          <div style={{fontSize:'14px', color:'#fbbf24', fontWeight:600, marginBottom:'8px'}}>
+                            ⭐ {review.rating.toFixed(1)}/10
+                          </div>
+                        )}
+                        {review.content && (
+                          <p style={{fontSize:'14px', color:'rgba(255,255,255,0.7)', lineHeight:1.6, margin:'0 0 8px 0'}}>
+                            {review.content.length > 200 ? `${review.content.slice(0, 200)}...` : review.content}
+                          </p>
+                        )}
+                        <div style={{fontSize:'12px', color:'var(--muted)'}}>
+                          {new Date(review.created_at).toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Watchlist Section - Horizontal Scrollable Sections - Same format as private profile */}
+            <div>
+              <h2 style={{margin:0, marginBottom:'32px', fontSize:'24px', fontWeight:700, color:'var(--text)'}}>{displayName}'s Watchlist</h2>
+              
+              {/* Movie Watchlist - Red Theme */}
+              <div style={{
+                marginBottom:'40px',
+                padding:'24px',
+                background:'linear-gradient(135deg, rgba(229, 9, 20, 0.08) 0%, rgba(184, 7, 15, 0.04) 100%)',
+                border:'2px solid rgba(229, 9, 20, 0.3)',
+                borderRadius:'20px',
+                boxShadow:'0 8px 32px rgba(229, 9, 20, 0.12)',
+                transition:'all 0.3s ease'
+              }}>
+                <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
+                  <h3 style={{
+                    margin:0, 
+                    fontSize:'22px', 
+                    fontWeight:700, 
+                    color:'#fff', 
+                    display:'flex', 
+                    alignItems:'center', 
+                    gap:'12px',
+                    textShadow:'0 2px 8px rgba(229, 9, 20, 0.4)'
+                  }}>
+                    <span style={{
+                      fontSize:'28px',
+                      filter:'drop-shadow(0 2px 4px rgba(229, 9, 20, 0.5))'
+                    }}>🎬</span> 
+                    <span style={{
+                      background:'linear-gradient(135deg, #ff6b6b 0%, #e50914 100%)',
+                      WebkitBackgroundClip:'text',
+                      WebkitTextFillColor:'transparent',
+                      backgroundClip:'text'
+                    }}>Movies</span>
+                  </h3>
+                  <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
+                    {publicMovieWatchlist.length > 0 && (
+                      <div style={{
+                        fontSize:'14px', 
+                        color:'rgba(255, 255, 255, 0.8)',
+                        background:'rgba(229, 9, 20, 0.2)',
+                        padding:'6px 14px',
+                        borderRadius:'12px',
+                        border:'1px solid rgba(229, 9, 20, 0.3)'
+                      }}>
+                        {publicMovieWatchlist.length} {publicMovieWatchlist.length === 1 ? 'item' : 'items'}
+                      </div>
+                    )}
+                    {publicMovieWatchlist.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setPublicMovieWatchlistExpanded(!publicMovieWatchlistExpanded)}
+                        style={{
+                          background:'rgba(229, 9, 20, 0.2)',
+                          border:'1px solid rgba(229, 9, 20, 0.4)',
+                          borderRadius:'10px',
+                          width:'40px',
+                          height:'40px',
+                          display:'flex',
+                          alignItems:'center',
+                          justifyContent:'center',
+                          cursor:'pointer',
+                          transition:'all 0.3s ease',
+                          color:'#fff',
+                          fontSize:'18px',
+                          padding:0
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(229, 9, 20, 0.35)'
+                          e.currentTarget.style.borderColor = 'rgba(229, 9, 20, 0.6)'
+                          e.currentTarget.style.transform = 'scale(1.05)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'rgba(229, 9, 20, 0.2)'
+                          e.currentTarget.style.borderColor = 'rgba(229, 9, 20, 0.4)'
+                          e.currentTarget.style.transform = 'scale(1)'
+                        }}
+                        aria-label={publicMovieWatchlistExpanded ? 'Collapse movies' : 'Expand movies'}
+                      >
+                        <span style={{
+                          display:'inline-block',
+                          transform: publicMovieWatchlistExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                          transition:'transform 0.3s ease'
+                        }}>▼</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {userProfileLoading ? (
+                  <p style={{color:'var(--muted)', textAlign:'center', padding:'40px'}}>Loading...</p>
+                ) : publicMovieWatchlist.length === 0 ? (
+                  <div style={{
+                    padding:'60px 20px',
+                    textAlign:'center',
+                    background:'rgba(20, 20, 28, 0.6)',
+                    border:'1px solid rgba(229, 9, 20, 0.3)',
+                    borderRadius:'16px'
+                  }}>
+                    <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>🎬</div>
+                    <p style={{color:'rgba(255, 255, 255, 0.7)', fontSize:'16px', margin:0}}>No movies in watchlist.</p>
+                  </div>
+                ) : (
+                  <div style={{
+                    maxHeight: publicMovieWatchlistExpanded ? '600px' : '0',
+                    overflow:'hidden',
+                    transition:'max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease',
+                    opacity: publicMovieWatchlistExpanded ? 1 : 0
+                  }}>
+                    <div style={{
+                      display:'grid',
+                      gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))',
+                      gap:'16px',
+                      maxHeight:'600px',
+                      overflowY:'auto',
+                      overflowX:'hidden',
+                      paddingRight:'8px',
+                      paddingTop:'8px',
+                      scrollbarWidth:'thin',
+                      scrollbarColor:'rgba(229, 9, 20, 0.5) rgba(20, 20, 28, 0.3)',
+                      WebkitOverflowScrolling:'touch'
+                    }}>
+                      {publicMovieWatchlist.map((item, idx) => {
+                        return (
+                          <Card
+                            key={`public-movie-watchlist-${item.id || idx}`}
+                            item={{
+                              id: item.id,
+                              tmdb_id: item.id || 0,
+                              media_type: 'movie',
+                              title: item.title,
+                              poster_path: item.poster_path || undefined,
+                            } as MediaItem}
+                            onClick={() => {
+                              if(item.id) {
+                                navigateToDetail('movie', item.id)
+                              }
+                            }}
+                          />
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* TV Watchlist - Blue Theme */}
+              <div style={{
+                padding:'24px',
+                background:'linear-gradient(135deg, rgba(37, 99, 235, 0.08) 0%, rgba(30, 64, 175, 0.04) 100%)',
+                border:'2px solid rgba(37, 99, 235, 0.3)',
+                borderRadius:'20px',
+                boxShadow:'0 8px 32px rgba(37, 99, 235, 0.12)',
+                transition:'all 0.3s ease'
+              }}>
+                <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
+                  <h3 style={{
+                    margin:0, 
+                    fontSize:'22px', 
+                    fontWeight:700, 
+                    color:'#fff', 
+                    display:'flex', 
+                    alignItems:'center', 
+                    gap:'12px',
+                    textShadow:'0 2px 8px rgba(37, 99, 235, 0.4)'
+                  }}>
+                    <span style={{
+                      fontSize:'28px',
+                      filter:'drop-shadow(0 2px 4px rgba(37, 99, 235, 0.5))'
+                    }}>📺</span> 
+                    <span style={{
+                      background:'linear-gradient(135deg, #60a5fa 0%, #2563eb 100%)',
+                      WebkitBackgroundClip:'text',
+                      WebkitTextFillColor:'transparent',
+                      backgroundClip:'text'
+                    }}>TV Shows</span>
+                  </h3>
+                  <div style={{display:'flex', alignItems:'center', gap:'12px'}}>
+                    {publicTvWatchlist.length > 0 && (
+                      <div style={{
+                        fontSize:'14px', 
+                        color:'rgba(255, 255, 255, 0.8)',
+                        background:'rgba(37, 99, 235, 0.2)',
+                        padding:'6px 14px',
+                        borderRadius:'12px',
+                        border:'1px solid rgba(37, 99, 235, 0.3)'
+                      }}>
+                        {publicTvWatchlist.length} {publicTvWatchlist.length === 1 ? 'item' : 'items'}
+                      </div>
+                    )}
+                    {publicTvWatchlist.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setPublicTvWatchlistExpanded(!publicTvWatchlistExpanded)}
+                        style={{
+                          background:'rgba(37, 99, 235, 0.2)',
+                          border:'1px solid rgba(37, 99, 235, 0.4)',
+                          borderRadius:'10px',
+                          width:'40px',
+                          height:'40px',
+                          display:'flex',
+                          alignItems:'center',
+                          justifyContent:'center',
+                          cursor:'pointer',
+                          transition:'all 0.3s ease',
+                          color:'#fff',
+                          fontSize:'18px',
+                          padding:0
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'rgba(37, 99, 235, 0.35)'
+                          e.currentTarget.style.borderColor = 'rgba(37, 99, 235, 0.6)'
+                          e.currentTarget.style.transform = 'scale(1.05)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'rgba(37, 99, 235, 0.2)'
+                          e.currentTarget.style.borderColor = 'rgba(37, 99, 235, 0.4)'
+                          e.currentTarget.style.transform = 'scale(1)'
+                        }}
+                        aria-label={publicTvWatchlistExpanded ? 'Collapse TV shows' : 'Expand TV shows'}
+                      >
+                        <span style={{
+                          display:'inline-block',
+                          transform: publicTvWatchlistExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                          transition:'transform 0.3s ease'
+                        }}>▼</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {userProfileLoading ? (
+                  <p style={{color:'var(--muted)', textAlign:'center', padding:'40px'}}>Loading...</p>
+                ) : publicTvWatchlist.length === 0 ? (
+                  <div style={{
+                    padding:'60px 20px',
+                    textAlign:'center',
+                    background:'rgba(20, 20, 28, 0.6)',
+                    border:'1px solid rgba(37, 99, 235, 0.3)',
+                    borderRadius:'16px'
+                  }}>
+                    <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>📺</div>
+                    <p style={{color:'rgba(255, 255, 255, 0.7)', fontSize:'16px', margin:0}}>No TV shows in watchlist.</p>
+                  </div>
+                ) : (
+                  <div style={{
+                    maxHeight: publicTvWatchlistExpanded ? '600px' : '0',
+                    overflow:'hidden',
+                    transition:'max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease',
+                    opacity: publicTvWatchlistExpanded ? 1 : 0
+                  }}>
+                    <div style={{
+                      display:'grid',
+                      gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))',
+                      gap:'16px',
+                      maxHeight:'600px',
+                      overflowY:'auto',
+                      overflowX:'hidden',
+                      paddingRight:'8px',
+                      paddingTop:'8px',
+                      scrollbarWidth:'thin',
+                      scrollbarColor:'rgba(37, 99, 235, 0.5) rgba(20, 20, 28, 0.3)',
+                      WebkitOverflowScrolling:'touch'
+                    }}>
+                      {publicTvWatchlist.map((item, idx) => {
+                        return (
+                          <Card
+                            key={`public-tv-watchlist-${item.id || idx}`}
+                            item={{
+                              id: item.id,
+                              tmdb_id: item.id || 0,
+                              media_type: 'tv',
+                              title: item.title,
+                              poster_path: item.poster_path || undefined,
+                            } as MediaItem}
+                            onClick={() => {
+                              if(item.id) {
+                                navigateToDetail('tv', item.id)
+                              }
+                            }}
+                          />
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* No Activity */}
+            {(!viewingUserProfile.favorites || viewingUserProfile.favorites.length === 0) && 
+             (!viewingUserProfile.recent_reviews || viewingUserProfile.recent_reviews.length === 0) &&
+             (!viewingUserProfile.watchlist?.movies || viewingUserProfile.watchlist.movies.length === 0) &&
+             (!viewingUserProfile.watchlist?.tv || viewingUserProfile.watchlist.tv.length === 0) && (
+              <div style={{textAlign:'center', padding:'60px 20px', color:'var(--muted)'}}>
+                <div style={{fontSize:'48px', marginBottom:'16px'}}>🔍</div>
+                <div style={{fontSize:'16px'}}>{displayName} hasn't reviewed anything yet.</div>
+              </div>
+            )}
+          </>
+        ) : null}
+      </div>
+    )
+  }
+
   if(view === 'profile'){
     if(!currentUser){
       return (
@@ -2194,7 +3273,7 @@ export default function App() {
                 borderRadius:'16px'
               }}>
                 <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>🎬</div>
-                <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No movie favorites yet. Start rating movies!</p>
+                <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No movie favorites yet. Use the ❤️ Favorite button on any movie to add it here!</p>
               </div>
             ) : (
               <>
@@ -2211,7 +3290,7 @@ export default function App() {
                             media_type: 'movie',
                             title: fav.title,
                             poster_path: fav.poster_path || undefined,
-                            vote_average: fav.rating
+                            vote_average: fav.rating || undefined
                           } as MediaItem}
                           onClick={() => {
                             if(fav.id) {
@@ -2277,7 +3356,7 @@ export default function App() {
                 borderRadius:'16px'
               }}>
                 <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>📺</div>
-                <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No TV favorites yet. Start rating shows!</p>
+                <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No TV favorites yet. Use the ❤️ Favorite button on any show to add it here!</p>
               </div>
             ) : (
               <>
@@ -2294,7 +3373,7 @@ export default function App() {
                             media_type: 'tv',
                             title: fav.title,
                             poster_path: fav.poster_path || undefined,
-                            vote_average: fav.rating
+                            vote_average: fav.rating || undefined
                           } as MediaItem}
                           onClick={() => {
                             if(fav.id) {
@@ -2337,6 +3416,102 @@ export default function App() {
           </div>
         </div>
 
+        {/* Recent Reviews Section */}
+        {profileData?.recent_reviews && profileData.recent_reviews.length > 0 && (
+          <div style={{marginBottom:'40px'}}>
+            <h2 style={{margin:0, marginBottom:'24px', fontSize:'24px', fontWeight:700, color:'var(--text)'}}>
+              📝 Recent Reviews
+            </h2>
+            <div style={{display:'flex', flexDirection:'column', gap:'16px'}}>
+              {profileData.recent_reviews.map((review, idx) => (
+                <div
+                  key={`my-review-${review.review_id}-${idx}`}
+                  style={{
+                    background:'rgba(20, 20, 28, 0.95)',
+                    border:'1px solid rgba(255,255,255,0.08)',
+                    borderRadius:'12px',
+                    padding:'20px',
+                    display:'flex',
+                    gap:'16px'
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => navigateToDetail(review.media_type, review.id!)}
+                    style={{
+                      width:'120px',
+                      minWidth:'120px',
+                      aspectRatio:'2/3',
+                      borderRadius:'8px',
+                      overflow:'hidden',
+                      background:'rgba(255,255,255,0.05)',
+                      flexShrink:0,
+                      border:'none',
+                      cursor:'pointer',
+                      display:'flex',
+                      alignItems:'center',
+                      justifyContent:'center',
+                      padding:0
+                    }}
+                  >
+                    {review.poster_path ? (
+                      <img
+                        src={getImageUrl(review.poster_path, 'w185')}
+                        alt={review.title}
+                        style={{
+                          maxWidth:'100%',
+                          maxHeight:'100%',
+                          width:'auto',
+                          height:'auto',
+                          objectFit:'contain',
+                          display:'block',
+                          margin:'auto'
+                        }}
+                      />
+                    ) : (
+                      <div style={{width:'100%', height:'100%', display:'flex', alignItems:'center', justifyContent:'center', color:'var(--muted)', fontSize:'12px'}}>
+                        ?
+                      </div>
+                    )}
+                  </button>
+                  <div style={{flex:1, minWidth:0}}>
+                    <button
+                      type="button"
+                      onClick={() => navigateToDetail(review.media_type, review.id!)}
+                      style={{
+                        fontSize:'16px',
+                        fontWeight:600,
+                        color:'var(--accent)',
+                        marginBottom:'8px',
+                        display:'block',
+                        background:'none',
+                        border:'none',
+                        padding:0,
+                        cursor:'pointer',
+                        textAlign:'left'
+                      }}
+                    >
+                      {review.media_type === 'movie' ? '🎬' : '📺'} {review.title}
+                    </button>
+                    {review.rating !== null && (
+                      <div style={{fontSize:'14px', color:'#fbbf24', fontWeight:600, marginBottom:'8px'}}>
+                        ⭐ {review.rating.toFixed(1)}/10
+                      </div>
+                    )}
+                    {review.content && (
+                      <p style={{fontSize:'14px', color:'rgba(255,255,255,0.7)', lineHeight:1.6, margin:'0 0 8px 0'}}>
+                        {review.content.length > 200 ? `${review.content.slice(0, 200)}...` : review.content}
+                      </p>
+                    )}
+                    <div style={{fontSize:'12px', color:'var(--muted)'}}>
+                      {new Date(review.created_at).toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Watchlist Section - Horizontal Scrollable Sections */}
         <div>
@@ -2720,6 +3895,15 @@ export default function App() {
       setSettingsSaving(true)
 
       try {
+        console.log('[Settings] Submitting update with:', {
+          hasDisplayNameChange,
+          hasEmailChange,
+          hasPasswordChange,
+          displayName: hasDisplayNameChange ? settingsDisplayName.trim() : '(no change)',
+          newEmail: hasEmailChange ? settingsNewEmail : '(no change)',
+          newPassword: hasPasswordChange ? settingsNewPassword : '(no change)',
+          currentPassword: settingsCurrentPassword ? '(provided)' : '(missing)'
+        })
         const result = await updateUserSettings({
           current_password: settingsCurrentPassword,
           display_name: hasDisplayNameChange ? settingsDisplayName.trim() : undefined,
@@ -2728,31 +3912,21 @@ export default function App() {
         })
 
         if(result.ok){
+          console.log('[Settings] Update succeeded')
           setSettingsSuccess(result.message || 'Your settings have been updated.')
           setSettingsCurrentPassword('')
           setSettingsNewPassword('')
           setSettingsConfirmPassword('')
           
-          // Update current user state if display_name or email changed
-          if(hasDisplayNameChange || hasEmailChange){
-            const updatedUser = {
-              ...currentUser,
-              email: hasEmailChange ? settingsNewEmail : currentUser?.email,
-              user: hasDisplayNameChange ? settingsDisplayName.trim() : (hasEmailChange ? settingsNewEmail.split('@')[0] : currentUser?.user),
-              display_name: hasDisplayNameChange ? settingsDisplayName.trim() : currentUser?.display_name
-            }
-            setCurrentUser(updatedUser)
-            if(hasEmailChange && updatedUser.user_id && updatedUser.email){
-              setAuthToken(updatedUser.user_id, updatedUser.email)
-            }
-            try {
-              sessionStorage.setItem('currentUser', JSON.stringify(updatedUser))
-              if(remember){
-                localStorage.setItem('currentUser', JSON.stringify(updatedUser))
-              }
-            } catch {}
+          // Immediately update form fields with new values
+          if(hasEmailChange){
+            setSettingsNewEmail(settingsNewEmail) // Update to new email
+          }
+          if(hasDisplayNameChange){
+            setSettingsDisplayName(settingsDisplayName.trim()) // Keep the new display name
           }
           
+          // Refresh settings data from server to get latest values
           const refreshResult = await getUserSettings()
           if(refreshResult.ok){
             setSettingsData({
@@ -2762,8 +3936,44 @@ export default function App() {
               created_at: refreshResult.created_at,
               is_admin: refreshResult.is_admin
             })
+            // Update form fields with refreshed data
             setSettingsDisplayName(refreshResult.display_name || refreshResult.email.split('@')[0] || '')
             setSettingsNewEmail(refreshResult.email)
+            
+            // Always update current user state to ensure header and other components reflect changes
+            // This ensures live updates across the entire app
+            if(currentUser){
+              const updatedUser = {
+                ...currentUser,
+                email: refreshResult.email,
+                user: refreshResult.display_name || refreshResult.email.split('@')[0] || currentUser?.user || '',
+                display_name: refreshResult.display_name
+              }
+              setCurrentUser(updatedUser)
+              
+              // Update auth token if email changed (needed for API calls)
+              if(hasEmailChange && updatedUser.user_id && updatedUser.email){
+                setAuthToken(updatedUser.user_id, updatedUser.email)
+              }
+              
+              // Persist updated user info
+              try {
+                sessionStorage.setItem('currentUser', JSON.stringify(updatedUser))
+                if(remember){
+                  localStorage.setItem('currentUser', JSON.stringify(updatedUser))
+                }
+              } catch {}
+            }
+            
+            // Also refresh profile data if user is viewing their profile
+            if(view === 'profile'){
+              try {
+                const profileResult = await getUserProfile()
+                if(profileResult.ok){
+                  setProfileData(profileResult)
+                }
+              } catch {}
+            }
           }
         } else {
           setSettingsError(result.error || 'Failed to update settings')
@@ -3688,8 +4898,18 @@ export default function App() {
                     <div className="poster-stat">
                       <div className="poster-stat-icon">⭐</div>
                       <div className="poster-stat-content">
-                        <div className="poster-stat-value">{detailData.vote_average?.toFixed(1) ?? 'N/A'}</div>
-                        <div className="poster-stat-label">TMDb Score</div>
+                        <div className="poster-stat-value">
+                          {detailData.consolidated_rating !== undefined && detailData.consolidated_rating !== null
+                            ? (detailData.consolidated_rating % 1 === 0 
+                                ? detailData.consolidated_rating 
+                                : detailData.consolidated_rating.toFixed(1))
+                            : (detailData.vote_average?.toFixed(1) ?? 'N/A')}
+                        </div>
+                        <div className="poster-stat-label">
+                          {detailData.consolidated_rating !== undefined && detailData.consolidated_rating !== null
+                            ? 'Rating'
+                            : 'TMDb Score'}
+                        </div>
                       </div>
                     </div>
                     {detailData.vote_count && (
@@ -3718,120 +4938,210 @@ export default function App() {
                       </div>
                       <div style={{display:'flex', gap:'12px', alignItems:'center'}}>
                         {currentUser && (
-                          <button
-                            type="button"
-                            className={`detail-watchlist-button ${isInWatchlist ? 'detail-watchlist-button-active' : ''}`}
-                            onClick={async () => {
-                              if(!currentUser || !detailData) return
-                              
-                              // Get user_id if not available
-                              let userId = currentUser.user_id
-                              if(!userId && currentUser.email) {
-                                try {
-                                  const userData = await getUserByEmail(currentUser.email)
-                                  if(userData.ok && userData.user_id) {
-                                    userId = userData.user_id
-                                    const updatedUser = { ...currentUser, user_id: userId }
-                                    setCurrentUser(updatedUser)
-                                    try {
-                                      sessionStorage.setItem('currentUser', JSON.stringify(updatedUser))
-                                      if(localStorage.getItem('rememberUser') === '1') {
-                                        localStorage.setItem('currentUser', JSON.stringify(updatedUser))
-                                      }
-                                    } catch {}
-                                  } else {
-                                    alert('Please log in to manage your watchlist.')
+                          <>
+                            <button
+                              type="button"
+                              className={`detail-favorite-button ${isFavorite ? 'detail-favorite-button-active' : ''}`}
+                              onClick={async () => {
+                                if(!currentUser || !detailData) return
+                                
+                                // Get user_id if not available
+                                let userId = currentUser.user_id
+                                if(!userId && currentUser.email) {
+                                  try {
+                                    const userData = await getUserByEmail(currentUser.email)
+                                    if(userData.ok && userData.user_id) {
+                                      userId = userData.user_id
+                                      const updatedUser = { ...currentUser, user_id: userId }
+                                      setCurrentUser(updatedUser)
+                                      try {
+                                        sessionStorage.setItem('currentUser', JSON.stringify(updatedUser))
+                                        if(localStorage.getItem('rememberUser') === '1') {
+                                          localStorage.setItem('currentUser', JSON.stringify(updatedUser))
+                                        }
+                                      } catch {}
+                                    } else {
+                                      alert('Please log in to manage your favorites.')
+                                      return
+                                    }
+                                  } catch (err: any) {
+                                    alert(`Error: ${err?.message || 'Unknown error'}`)
                                     return
+                                  }
+                                }
+                                
+                                if(!userId) {
+                                  alert('Please log in to manage your favorites.')
+                                  return
+                                }
+                                
+                                setFavoriteLoading(true)
+                                try {
+                                  const mediaType = detailData.media_type
+                                  const targetType = mediaType === 'movie' ? 'movie' : 'show'
+                                  const id = mediaType === 'movie' 
+                                    ? (detailData as MovieDetail).movie_id 
+                                    : (detailData as ShowDetail).show_id
+                                  
+                                  if(isFavorite) {
+                                    // Remove from favorites
+                                    const result = await removeFromFavorites(userId, targetType, id)
+                                    if(result.ok) {
+                                      setIsFavorite(false)
+                                    } else {
+                                      alert(`Failed to remove from favorites: ${result.error}`)
+                                    }
+                                  } else {
+                                    // Add to favorites
+                                    const result = await addToFavorites(userId, targetType, id)
+                                    if(result.ok) {
+                                      setIsFavorite(true)
+                                    } else {
+                                      alert(`Failed to add to favorites: ${result.error}`)
+                                    }
                                   }
                                 } catch (err: any) {
                                   alert(`Error: ${err?.message || 'Unknown error'}`)
+                                } finally {
+                                  setFavoriteLoading(false)
+                                }
+                              }}
+                              disabled={favoriteLoading || detailLoading || !currentUser}
+                              style={{
+                                padding:'10px 20px',
+                                borderRadius:'8px',
+                                border:'1px solid rgba(255, 255, 255, 0.2)',
+                                background: isFavorite 
+                                  ? 'rgba(239, 68, 68, 0.95)' 
+                                  : 'rgba(20, 20, 28, 0.95)',
+                                color: '#ffffff',
+                                cursor: favoriteLoading || detailLoading || !currentUser ? 'not-allowed' : 'pointer',
+                                fontWeight:600,
+                                fontSize:'14px',
+                                transition:'all 0.2s ease',
+                                opacity: favoriteLoading || detailLoading || !currentUser ? 0.6 : 1,
+                                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1)',
+                                backdropFilter: 'blur(8px)',
+                                WebkitBackdropFilter: 'blur(8px)'
+                              }}
+                            >
+                              {favoriteLoading ? '...' : (isFavorite ? '❤️ Favorited' : '🤍 Favorite')}
+                            </button>
+                            <button
+                              type="button"
+                              className={`detail-watchlist-button ${isInWatchlist ? 'detail-watchlist-button-active' : ''}`}
+                              onClick={async () => {
+                                if(!currentUser || !detailData) return
+                                
+                                // Get user_id if not available
+                                let userId = currentUser.user_id
+                                if(!userId && currentUser.email) {
+                                  try {
+                                    const userData = await getUserByEmail(currentUser.email)
+                                    if(userData.ok && userData.user_id) {
+                                      userId = userData.user_id
+                                      const updatedUser = { ...currentUser, user_id: userId }
+                                      setCurrentUser(updatedUser)
+                                      try {
+                                        sessionStorage.setItem('currentUser', JSON.stringify(updatedUser))
+                                        if(localStorage.getItem('rememberUser') === '1') {
+                                          localStorage.setItem('currentUser', JSON.stringify(updatedUser))
+                                        }
+                                      } catch {}
+                                    } else {
+                                      alert('Please log in to manage your watchlist.')
+                                      return
+                                    }
+                                  } catch (err: any) {
+                                    alert(`Error: ${err?.message || 'Unknown error'}`)
+                                    return
+                                  }
+                                }
+                                
+                                if(!userId) {
+                                  alert('Please log in to manage your watchlist.')
                                   return
                                 }
-                              }
-                              
-                              if(!userId) {
-                                alert('Please log in to manage your watchlist.')
-                                return
-                              }
-                              
-                              setWatchlistLoading(true)
-                              try {
-                                const mediaType = detailData.media_type
-                                const targetType = mediaType === 'movie' ? 'movie' : 'show'
-                                const id = mediaType === 'movie' 
-                                  ? (detailData as MovieDetail).movie_id 
-                                  : (detailData as ShowDetail).show_id
                                 
-                                if(isInWatchlist) {
-                                  // Remove from watchlist
-                                  const result = await removeFromWatchlist(userId, targetType, id)
-                                  if(result.ok) {
-                                    setIsInWatchlist(false)
-                                    // Refresh profile data to update watchlist
-                                    if(profileData) {
-                                      const updatedProfile = { ...profileData }
-                                      if(mediaType === 'movie') {
-                                        updatedProfile.watchlist.movies = updatedProfile.watchlist.movies.filter(m => m.id !== id)
-                                      } else {
-                                        updatedProfile.watchlist.tv = updatedProfile.watchlist.tv.filter(t => t.id !== id)
+                                setWatchlistLoading(true)
+                                try {
+                                  const mediaType = detailData.media_type
+                                  const targetType = mediaType === 'movie' ? 'movie' : 'show'
+                                  const id = mediaType === 'movie' 
+                                    ? (detailData as MovieDetail).movie_id 
+                                    : (detailData as ShowDetail).show_id
+                                  
+                                  if(isInWatchlist) {
+                                    // Remove from watchlist
+                                    const result = await removeFromWatchlist(userId, targetType, id)
+                                    if(result.ok) {
+                                      setIsInWatchlist(false)
+                                      // Refresh profile data to update watchlist
+                                      if(profileData) {
+                                        const updatedProfile = { ...profileData }
+                                        if(mediaType === 'movie') {
+                                          updatedProfile.watchlist.movies = updatedProfile.watchlist.movies.filter(m => m.id !== id)
+                                        } else {
+                                          updatedProfile.watchlist.tv = updatedProfile.watchlist.tv.filter(t => t.id !== id)
+                                        }
+                                        setProfileData(updatedProfile)
                                       }
-                                      setProfileData(updatedProfile)
+                                    } else {
+                                      alert(`Failed to remove from watchlist: ${result.error}`)
                                     }
                                   } else {
-                                    alert(`Failed to remove from watchlist: ${result.error}`)
-                                  }
-                                } else {
-                                  // Add to watchlist
-                                  const result = await addToWatchlist(userId, targetType, id)
-                                  if(result.ok) {
-                                    setIsInWatchlist(true)
-                                    // Refresh profile data to update watchlist
-                                    if(profileData) {
-                                      const updatedProfile = { ...profileData }
-                                      const item = {
-                                        title: detailData.title,
-                                        media_type: mediaType,
-                                        id: id,
-                                        poster_path: detailData.poster_path || null
+                                    // Add to watchlist
+                                    const result = await addToWatchlist(userId, targetType, id)
+                                    if(result.ok) {
+                                      setIsInWatchlist(true)
+                                      // Refresh profile data to update watchlist
+                                      if(profileData) {
+                                        const updatedProfile = { ...profileData }
+                                        const item = {
+                                          title: detailData.title,
+                                          media_type: mediaType,
+                                          id: id,
+                                          poster_path: detailData.poster_path || null
+                                        }
+                                        if(mediaType === 'movie') {
+                                          updatedProfile.watchlist.movies = [...updatedProfile.watchlist.movies, item]
+                                        } else {
+                                          updatedProfile.watchlist.tv = [...updatedProfile.watchlist.tv, item]
+                                        }
+                                        setProfileData(updatedProfile)
                                       }
-                                      if(mediaType === 'movie') {
-                                        updatedProfile.watchlist.movies = [...updatedProfile.watchlist.movies, item]
-                                      } else {
-                                        updatedProfile.watchlist.tv = [...updatedProfile.watchlist.tv, item]
-                                      }
-                                      setProfileData(updatedProfile)
+                                    } else {
+                                      alert(`Failed to add to watchlist: ${result.error}`)
                                     }
-                                  } else {
-                                    alert(`Failed to add to watchlist: ${result.error}`)
                                   }
+                                } catch (err: any) {
+                                  alert(`Error: ${err?.message || 'Unknown error'}`)
+                                } finally {
+                                  setWatchlistLoading(false)
                                 }
-                              } catch (err: any) {
-                                alert(`Error: ${err?.message || 'Unknown error'}`)
-                              } finally {
-                                setWatchlistLoading(false)
-                              }
-                            }}
-                            disabled={watchlistLoading || detailLoading || !currentUser}
-                            style={{
-                              padding:'10px 20px',
-                              borderRadius:'8px',
-                              border:'1px solid rgba(255, 255, 255, 0.2)',
-                              background: isInWatchlist 
-                                ? 'rgba(59, 130, 246, 0.95)' 
-                                : 'rgba(20, 20, 28, 0.95)',
-                              color: isInWatchlist ? '#ffffff' : '#ffffff',
-                              cursor: watchlistLoading || detailLoading || !currentUser ? 'not-allowed' : 'pointer',
-                              fontWeight:600,
-                              fontSize:'14px',
-                              transition:'all 0.2s ease',
-                              opacity: watchlistLoading || detailLoading || !currentUser ? 0.6 : 1,
-                              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1)',
-                              backdropFilter: 'blur(8px)',
-                              WebkitBackdropFilter: 'blur(8px)'
-                            }}
-                          >
-                            {watchlistLoading ? '...' : (isInWatchlist ? '✓ In Watchlist' : '+ Add to Watchlist')}
-                          </button>
+                              }}
+                              disabled={watchlistLoading || detailLoading || !currentUser}
+                              style={{
+                                padding:'10px 20px',
+                                borderRadius:'8px',
+                                border:'1px solid rgba(255, 255, 255, 0.2)',
+                                background: isInWatchlist 
+                                  ? 'rgba(59, 130, 246, 0.95)' 
+                                  : 'rgba(20, 20, 28, 0.95)',
+                                color: isInWatchlist ? '#ffffff' : '#ffffff',
+                                cursor: watchlistLoading || detailLoading || !currentUser ? 'not-allowed' : 'pointer',
+                                fontWeight:600,
+                                fontSize:'14px',
+                                transition:'all 0.2s ease',
+                                opacity: watchlistLoading || detailLoading || !currentUser ? 0.6 : 1,
+                                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1)',
+                                backdropFilter: 'blur(8px)',
+                                WebkitBackdropFilter: 'blur(8px)'
+                              }}
+                            >
+                              {watchlistLoading ? '...' : (isInWatchlist ? '✓ In Watchlist' : '+ Add to Watchlist')}
+                            </button>
+                          </>
                         )}
                         {currentUser?.is_admin && (
                           <button
@@ -4064,6 +5374,24 @@ export default function App() {
                   <div className="detail-stats-section">
                     <h3 className="section-title">Statistics</h3>
                     <div className="detail-stats-grid">
+                      {detailData.consolidated_rating !== undefined && detailData.consolidated_rating !== null && (
+                        <div className="stat-card">
+                          <div className="stat-icon">⭐</div>
+                          <div className="stat-value">
+                            {detailData.consolidated_rating % 1 === 0 
+                              ? detailData.consolidated_rating 
+                              : detailData.consolidated_rating.toFixed(1)}
+                          </div>
+                          <div className="stat-label">Overall Rating</div>
+                        </div>
+                      )}
+                      {detailData.vote_average !== undefined && detailData.vote_average !== null && (
+                        <div className="stat-card">
+                          <div className="stat-icon">🎬</div>
+                          <div className="stat-value">{detailData.vote_average.toFixed(1)}</div>
+                          <div className="stat-label">TMDb Score</div>
+                        </div>
+                      )}
                       {detailData.user_avg_rating && (
                         <div className="stat-card">
                           <div className="stat-icon">👥</div>
@@ -4100,6 +5428,176 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Cast & Characters Section */}
+                  {cast.length > 0 && (
+                    <div className="detail-cast-section">
+                      <h3 className="section-title">Cast & Characters</h3>
+                      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
+                        <div style={{fontSize:'14px', color:'var(--muted)'}}>
+                          {cast.length} {cast.length === 1 ? 'cast member' : 'cast members'}
+                          {castTotalPages > 1 && ` • Page ${castPage + 1} of ${castTotalPages}`}
+                        </div>
+                      </div>
+                      <div className="cast-carousel-wrapper">
+                        <div className={`cast-carousel-grid ${castTransitionType === 'slide' ? `new-release-grid-slide-${castSlideDirection}` : ''}`} style={{maxWidth: '100%'}}>
+                          {displayedCast.map((member, idx) => {
+                            const profileUrl = member.profile_url || getImageUrl(member.profile_path, 'w154')
+                            return (
+                              <button
+                                key={`cast-${member.person_id}-${idx}`}
+                                type="button"
+                                className="cast-card"
+                                onClick={() => {
+                                  // Navigate to person detail page if implemented
+                                  // navigateToDetail('person', member.person_id)
+                                }}
+                                style={{
+                                  background: 'rgba(20, 20, 28, 0.95)',
+                                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                                  borderRadius: '10px',
+                                  padding: '8px',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  textAlign: 'left',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '6px',
+                                  width: '100%'
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.background = 'rgba(30, 30, 40, 0.95)'
+                                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)'
+                                  e.currentTarget.style.transform = 'translateY(-2px)'
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.background = 'rgba(20, 20, 28, 0.95)'
+                                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)'
+                                  e.currentTarget.style.transform = 'translateY(0)'
+                                }}
+                              >
+                                <div style={{
+                                  width: '100%',
+                                  aspectRatio: '2/3',
+                                  borderRadius: '6px',
+                                  overflow: 'hidden',
+                                  background: 'rgba(0, 0, 0, 0.3)',
+                                  position: 'relative'
+                                }}>
+                                  {profileUrl ? (
+                                    <img
+                                      src={profileUrl}
+                                      alt={member.name}
+                                      style={{
+                                        width: '100%',
+                                        height: '100%',
+                                        objectFit: 'cover',
+                                        display: 'block'
+                                      }}
+                                      onError={(e) => {
+                                        e.currentTarget.style.display = 'none'
+                                        e.currentTarget.parentElement!.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:24px;">🎭</div>'
+                                      }}
+                                    />
+                                  ) : (
+                                    <div style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      height: '100%',
+                                      color: 'var(--muted)',
+                                      fontSize: '24px'
+                                    }}>
+                                      🎭
+                                    </div>
+                                  )}
+                                </div>
+                                <div style={{
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '3px',
+                                  minHeight: '48px'
+                                }}>
+                                  <div style={{
+                                    fontSize: '12px',
+                                    fontWeight: 600,
+                                    color: 'var(--text)',
+                                    lineHeight: 1.2,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    display: '-webkit-box',
+                                    WebkitLineClamp: 2,
+                                    WebkitBoxOrient: 'vertical'
+                                  }}>
+                                    {member.name}
+                                  </div>
+                                  {member.character && (
+                                    <div style={{
+                                      fontSize: '10px',
+                                      color: 'var(--muted)',
+                                      lineHeight: 1.2,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      display: '-webkit-box',
+                                      WebkitLineClamp: 2,
+                                      WebkitBoxOrient: 'vertical'
+                                    }}>
+                                      as {member.character}
+                                    </div>
+                                  )}
+                                </div>
+                              </button>
+                            )
+                          })}
+                        </div>
+                        {castTotalPages > 1 && (
+                          <>
+                            <button
+                              type="button"
+                              className="cast-carousel-nav cast-carousel-nav-prev"
+                              onClick={() => {
+                                setCastTransitionType('slide')
+                                setCastSlideDirection('right')
+                                setCastPage(prev => Math.max(0, prev - 1))
+                              }}
+                              disabled={castPage === 0}
+                              aria-label="Previous page"
+                            >
+                              <span className="cast-carousel-nav-icon">‹</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="cast-carousel-nav cast-carousel-nav-next"
+                              onClick={() => {
+                                setCastTransitionType('slide')
+                                setCastSlideDirection('left')
+                                setCastPage(prev => Math.min(castTotalPages - 1, prev + 1))
+                              }}
+                              disabled={castPage >= castTotalPages - 1}
+                              aria-label="Next page"
+                            >
+                              <span className="cast-carousel-nav-icon">›</span>
+                            </button>
+                            <div className="cast-carousel-dots">
+                              {Array.from({ length: castTotalPages }).map((_, idx) => (
+                                <button
+                                  type="button"
+                                  key={`cast-dot-${idx}`}
+                                  aria-label={`Go to page ${idx + 1}`}
+                                  className={idx === castPage ? 'active' : ''}
+                                  onClick={() => {
+                                    setCastTransitionType('slide')
+                                    setCastSlideDirection(idx > castPage ? 'left' : 'right')
+                                    setCastPage(idx)
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Reviews Section */}
                   <div className="detail-reviews-section">
                     <h3 className="section-title">Reviews</h3>
@@ -4114,17 +5612,304 @@ export default function App() {
                       <div className="reviews-list">
                         {reviews.map((review) => (
                           <div key={review.review_id} className="review-item">
-                            <div className="review-content">{review.content}</div>
-                            <div className="review-meta">
-                              {review.user_email && (
-                                <span className="review-author">{review.user_email.split('@')[0]}</span>
-                              )}
-                              {review.created_at && (
-                                <span className="review-date">
-                                  {new Date(review.created_at).toLocaleDateString()}
-                                </span>
-                              )}
-                            </div>
+                            {editingReviewId === review.review_id ? (
+                              // Edit Mode
+                              <div className="review-edit-form">
+                                <div className="review-edit-rating" style={{ marginBottom: '8px' }}>
+                                  <label htmlFor={`edit-rating-${review.review_id}`} style={{ fontSize: '14px', color: 'var(--text)', marginRight: '8px' }}>
+                                    Rating (optional, 0-10):
+                                  </label>
+                                  <input
+                                    type="number"
+                                    id={`edit-rating-${review.review_id}`}
+                                    value={editReviewRating ?? ''}
+                                    onChange={(e) => {
+                                      const value = e.target.value
+                                      if (value === '') {
+                                        setEditReviewRating(undefined)
+                                        return
+                                      }
+                                      const num = parseFloat(value)
+                                      if (!isNaN(num)) {
+                                        // Clamp to 0-10 range
+                                        const clamped = Math.max(0, Math.min(10, num))
+                                        // Allow decimals like 8.5, but round to 1 decimal place max
+                                        // Whole numbers stay as integers, decimals limited to 1 decimal place
+                                        const rounded = Math.round(clamped * 10) / 10
+                                        setEditReviewRating(rounded % 1 === 0 ? Math.round(rounded) : rounded)
+                                      }
+                                    }}
+                                    onBlur={(e) => {
+                                      // On blur, ensure proper formatting
+                                      if (editReviewRating !== undefined) {
+                                        const rounded = Math.round(editReviewRating * 10) / 10
+                                        setEditReviewRating(rounded % 1 === 0 ? Math.round(rounded) : rounded)
+                                      }
+                                    }}
+                                    min="0"
+                                    max="10"
+                                    step="0.1"
+                                    placeholder="e.g., 8.5 or 9"
+                                    style={{ 
+                                      padding: '6px 12px', 
+                                      borderRadius: '6px',
+                                      backgroundColor: 'var(--bg)',
+                                      color: 'var(--text)',
+                                      border: '1px solid var(--border)',
+                                      fontSize: '14px',
+                                      width: '120px'
+                                    }}
+                                  />
+                                  {editReviewRating !== undefined && (
+                                    <span style={{ marginLeft: '8px', fontSize: '14px', color: 'var(--accent)', fontWeight: 600 }}>
+                                      ⭐ {editReviewRating % 1 === 0 ? editReviewRating : editReviewRating.toFixed(1)}/10
+                                    </span>
+                                  )}
+                                </div>
+                                <textarea
+                                  value={editReviewText}
+                                  onChange={(e) => setEditReviewText(e.target.value)}
+                                  className="review-input-textarea"
+                                  rows={3}
+                                  style={{ marginTop: '8px' }}
+                                />
+                                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                                  <button
+                                    type="button"
+                                    className="review-submit-button"
+                                    onClick={async () => {
+                                      if(!editReviewText.trim()) {
+                                        alert('Review content cannot be empty')
+                                        return
+                                      }
+                                      setReviewSubmitting(true)
+                                      try {
+                                        const result = await updateReview(
+                                          review.review_id,
+                                          editReviewRating,
+                                          editReviewText.trim()
+                                        )
+                                        if(result.ok) {
+                                          setEditingReviewId(null)
+                                          setEditReviewText('')
+                                          setEditReviewRating(undefined)
+                                          // Reload reviews
+                                          if(!detailData) return
+                                          const mediaType = detailData.media_type
+                                          const targetType = mediaType === 'movie' ? 'movie' : 'show'
+                                          const id = mediaType === 'movie' 
+                                            ? (detailData as MovieDetail).movie_id 
+                                            : (detailData as ShowDetail).show_id
+                                          const reviewsData = await getReviews(targetType, id)
+                                          setReviews(reviewsData.reviews || [])
+                                          // Reload detail data to update consolidated rating and stats
+                                          if(mediaType === 'movie') {
+                                            const updatedData = await getMovieDetail(id)
+                                            setDetailData({ ...updatedData, media_type: 'movie' })
+                                          } else {
+                                            const updatedData = await getShowDetail(id)
+                                            setDetailData({ ...updatedData, media_type: 'tv' })
+                                          }
+                                        } else {
+                                          alert(`Failed to update review: ${result.error}`)
+                                        }
+                                      } catch (err: any) {
+                                        alert(`Error updating review: ${err?.message || 'Unknown error'}`)
+                                      } finally {
+                                        setReviewSubmitting(false)
+                                      }
+                                    }}
+                                    disabled={reviewSubmitting || !editReviewText.trim()}
+                                  >
+                                    {reviewSubmitting ? 'Saving...' : 'Save'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="review-submit-button"
+                                    onClick={() => {
+                                      setEditingReviewId(null)
+                                      setEditReviewText('')
+                                      setEditReviewRating(undefined)
+                                    }}
+                                    disabled={reviewSubmitting}
+                                    style={{ backgroundColor: 'var(--muted)', opacity: 0.7 }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              // Display Mode
+                              <>
+                                {review.rating !== null && review.rating !== undefined && (
+                                  <div className="review-rating" style={{ marginBottom: '6px', fontSize: '14px', fontWeight: 600, color: 'var(--text)' }}>
+                                    ⭐ {review.rating % 1 === 0 ? review.rating : review.rating.toFixed(1)}/10
+                                  </div>
+                                )}
+                                <div className="review-content">{review.content}</div>
+                                <div className="review-meta">
+                                  {review.user_email && (
+                                    <button
+                                      type="button"
+                                      className="review-author-link"
+                                      onClick={() => review.user_id && openUserProfile(review.user_id)}
+                                      title="View profile"
+                                    >
+                                      {review.user_email.split('@')[0]}
+                                    </button>
+                                  )}
+                                  {review.created_at && (
+                                    <span className="review-date">
+                                      {new Date(review.created_at).toLocaleDateString()}
+                                    </span>
+                                  )}
+                                  {(currentUser && (review.user_id === currentUser.user_id || currentUser.is_admin)) && (
+                                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                                      {review.user_id === currentUser.user_id && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setEditingReviewId(review.review_id)
+                                            setEditReviewText(review.content)
+                                            setEditReviewRating(review.rating ?? undefined)
+                                          }}
+                                          style={{ 
+                                            fontSize: '12px', 
+                                            padding: '4px 12px', 
+                                            backgroundColor: 'transparent',
+                                            border: '1px solid var(--accent)',
+                                            color: 'var(--accent)',
+                                            borderRadius: '4px',
+                                            cursor: 'pointer'
+                                          }}
+                                        >
+                                          Edit
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          const confirmMessage = currentUser.is_admin && review.user_id !== currentUser.user_id
+                                            ? `Are you sure you want to delete this review by ${review.user_email}? (Admin action)`
+                                            : 'Are you sure you want to delete this review?'
+                                          if(!confirm(confirmMessage)) return
+                                          setReviewSubmitting(true)
+                                          try {
+                                            const result = await deleteReview(review.review_id)
+                                            if(result.ok) {
+                                              // Reload reviews
+                                              if(!detailData) return
+                                              const mediaType = detailData.media_type
+                                              const targetType = mediaType === 'movie' ? 'movie' : 'show'
+                                              const id = mediaType === 'movie' 
+                                                ? (detailData as MovieDetail).movie_id 
+                                                : (detailData as ShowDetail).show_id
+                                              const reviewsData = await getReviews(targetType, id)
+                                              setReviews(reviewsData.reviews || [])
+                                              // Reload detail data to update consolidated rating and stats
+                                              if(mediaType === 'movie') {
+                                                const updatedData = await getMovieDetail(id)
+                                                setDetailData({ ...updatedData, media_type: 'movie' })
+                                              } else {
+                                                const updatedData = await getShowDetail(id)
+                                                setDetailData({ ...updatedData, media_type: 'tv' })
+                                              }
+                                            } else {
+                                              alert(`Failed to delete review: ${result.error}`)
+                                            }
+                                          } catch (err: any) {
+                                            alert(`Error deleting review: ${err?.message || 'Unknown error'}`)
+                                          } finally {
+                                            setReviewSubmitting(false)
+                                          }
+                                        }}
+                                        disabled={reviewSubmitting}
+                                        style={{ 
+                                          fontSize: '12px', 
+                                          padding: '4px 12px', 
+                                          backgroundColor: 'transparent',
+                                          border: '1px solid #ff4444',
+                                          color: '#ff4444',
+                                          borderRadius: '4px',
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                                {/* Reaction Buttons */}
+                                {currentUser && (
+                                  <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+                                    {['👍', '❤️', '😂', '😮', '😢', '🔥'].map((emote) => {
+                                      const count = review.reactions?.[emote] || 0
+                                      const isActive = userReactions[review.review_id]?.includes(emote) || false
+                                      return (
+                                        <button
+                                          key={emote}
+                                          type="button"
+                                          onClick={async () => {
+                                            if(!currentUser) return
+                                            try {
+                                              const result = await addReviewReaction(review.review_id, emote)
+                                              if(result.ok) {
+                                                // Reload reviews to get updated counts
+                                                if(!detailData) return
+                                                const mediaType = detailData.media_type
+                                                const targetType = mediaType === 'movie' ? 'movie' : 'show'
+                                                const id = mediaType === 'movie' 
+                                                  ? (detailData as MovieDetail).movie_id 
+                                                  : (detailData as ShowDetail).show_id
+                                                const reviewsData = await getReviews(targetType, id)
+                                                setReviews(reviewsData.reviews || [])
+                                                
+                                                // Reload user reactions
+                                                const reactionsMap: Record<number, string[]> = {}
+                                                for(const r of reviewsData.reviews || []){
+                                                  try {
+                                                    const reactionData = await getReviewReactions(r.review_id)
+                                                    if(reactionData.ok && reactionData.user_reactions){
+                                                      reactionsMap[r.review_id] = reactionData.user_reactions
+                                                    }
+                                                  } catch {}
+                                                }
+                                                setUserReactions(reactionsMap)
+                                              }
+                                            } catch (err: any) {
+                                              console.error('Error toggling reaction:', err)
+                                            }
+                                          }}
+                                          style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '6px 10px',
+                                            borderRadius: '20px',
+                                            border: `1px solid ${isActive ? 'var(--accent)' : 'rgba(255, 255, 255, 0.2)'}`,
+                                            backgroundColor: isActive ? 'rgba(76, 175, 80, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                                            color: 'var(--text)',
+                                            cursor: 'pointer',
+                                            fontSize: '14px',
+                                            transition: 'all 0.2s ease',
+                                            fontWeight: isActive ? 600 : 400
+                                          }}
+                                          onMouseEnter={(e) => {
+                                            e.currentTarget.style.backgroundColor = isActive ? 'rgba(76, 175, 80, 0.25)' : 'rgba(255, 255, 255, 0.1)'
+                                          }}
+                                          onMouseLeave={(e) => {
+                                            e.currentTarget.style.backgroundColor = isActive ? 'rgba(76, 175, 80, 0.15)' : 'rgba(255, 255, 255, 0.05)'
+                                          }}
+                                        >
+                                          <span>{emote}</span>
+                                          {count > 0 && <span style={{ fontSize: '12px', opacity: 0.8 }}>{count}</span>}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+                              </>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -4135,6 +5920,57 @@ export default function App() {
                     {/* Review Input */}
                     {currentUser && (
                       <div className="review-input-section">
+                        <div style={{ marginBottom: '8px' }}>
+                          <label htmlFor="review-rating" style={{ fontSize: '14px', color: 'var(--text)', marginRight: '8px' }}>
+                            Rating (optional, 0-10):
+                          </label>
+                          <input
+                            type="number"
+                            id="review-rating"
+                            value={reviewRating ?? ''}
+                            onChange={(e) => {
+                              const value = e.target.value
+                              if (value === '') {
+                                setReviewRating(undefined)
+                                return
+                              }
+                              const num = parseFloat(value)
+                              if (!isNaN(num)) {
+                                // Clamp to 0-10 range
+                                const clamped = Math.max(0, Math.min(10, num))
+                                // Allow decimals like 8.5, but round to 1 decimal place max
+                                // Whole numbers stay as integers, decimals limited to 1 decimal place
+                                const rounded = Math.round(clamped * 10) / 10
+                                setReviewRating(rounded % 1 === 0 ? Math.round(rounded) : rounded)
+                              }
+                            }}
+                            onBlur={(e) => {
+                              // On blur, ensure proper formatting
+                              if (reviewRating !== undefined) {
+                                const rounded = Math.round(reviewRating * 10) / 10
+                                setReviewRating(rounded % 1 === 0 ? Math.round(rounded) : rounded)
+                              }
+                            }}
+                            min="0"
+                            max="10"
+                            step="0.1"
+                            placeholder="e.g., 8.5 or 9"
+                            style={{ 
+                              padding: '6px 12px', 
+                              borderRadius: '6px',
+                              backgroundColor: 'var(--bg)',
+                              color: 'var(--text)',
+                              border: '1px solid var(--border)',
+                              fontSize: '14px',
+                              width: '120px'
+                            }}
+                          />
+                          {reviewRating !== undefined && (
+                            <span style={{ marginLeft: '8px', fontSize: '14px', color: 'var(--accent)', fontWeight: 600 }}>
+                              ⭐ {reviewRating % 1 === 0 ? reviewRating : reviewRating.toFixed(1)}/10
+                            </span>
+                          )}
+                        </div>
                         <textarea
                           value={reviewText}
                           onChange={(e) => setReviewText(e.target.value)}
@@ -4206,14 +6042,24 @@ export default function App() {
                                 userId,
                                 targetType,
                                 id,
-                                reviewText.trim()
+                                reviewText.trim(),
+                                reviewRating
                               )
                               
                               if(result.ok) {
                                 setReviewText('')
+                                setReviewRating(undefined)
                                 // Reload reviews
                                 const reviewsData = await getReviews(targetType, id)
                                 setReviews(reviewsData.reviews || [])
+                                // Reload detail data to update consolidated rating and stats
+                                if(mediaType === 'movie') {
+                                  const updatedData = await getMovieDetail(id)
+                                  setDetailData({ ...updatedData, media_type: 'movie' })
+                                } else {
+                                  const updatedData = await getShowDetail(id)
+                                  setDetailData({ ...updatedData, media_type: 'tv' })
+                                }
                               } else {
                                 alert(`Failed to submit review: ${result.error}`)
                               }
@@ -4566,6 +6412,9 @@ export default function App() {
 
       {tab==='analytics' && (
         <section className="analytics-section">
+          {/* ═══════════════════════════════════════════════════════════════════
+              HERO SECTION
+              ═══════════════════════════════════════════════════════════════════ */}
           <div className="analytics-hero">
             <div className="analytics-hero-copy">
               <span className="analytics-kicker">Library Snapshot</span>
@@ -4598,6 +6447,9 @@ export default function App() {
             </div>
           </div>
 
+          {/* ═══════════════════════════════════════════════════════════════════
+              QUICK STATS
+              ═══════════════════════════════════════════════════════════════════ */}
           <div className="analytics-metrics">
             <Stat
               label="Average Rating"
@@ -4621,102 +6473,466 @@ export default function App() {
             />
           </div>
 
-          <div className="analytics-panels">
-            <article className="analytics-card">
-              <header className="analytics-card-header">
-                <h3>Genre Leaderboard</h3>
-                {analyticsSnapshot.highlightGenre && (
-                  <span className="analytics-card-subtitle">
-                    {analyticsSnapshot.highlightGenre} leads with {analyticsSnapshot.highlightGenreCount} titles
-                  </span>
-                )}
-              </header>
-              <div className="analytics-genre-list">
-                {analyticsSnapshot.topGenres.length > 0 ? (
-                  analyticsSnapshot.topGenres.map((g: any) => {
-                    const ratio =
-                      analyticsSnapshot.highestGenreCount > 0
-                        ? Math.min(100, Math.max(6, (g.count / analyticsSnapshot.highestGenreCount) * 100))
-                        : 0
-                    return (
-                      <div className="analytics-genre-row" key={g.genre || 'unknown'}>
-                        <span className="analytics-genre-name">{g.genre || '—'}</span>
-                        <div className="analytics-progress-bar" aria-hidden="true">
-                          <div className="analytics-progress" style={{ width: `${ratio}%` }} />
-                        </div>
-                        <span className="analytics-genre-count">{g.count ?? 0}</span>
-                      </div>
-                    )
-                  })
-                ) : (
-                  <div className="analytics-empty-card">
-                    Genre insights will appear once titles have been ingested.
-                  </div>
-                )}
-              </div>
-            </article>
-
-            <article className="analytics-card">
-              <header className="analytics-card-header">
-                <h3>Language Footprint</h3>
-                <span className="analytics-card-subtitle">
-                  {analyticsSnapshot.languageCount} languages represented
-                </span>
-              </header>
-              <div className="analytics-language-grid">
-                {analyticsSnapshot.languages.length > 0 ? (
-                  analyticsSnapshot.languages.map((l: any) => {
-                    const pretty =
-                      formatLanguageLabel(l.language) ?? l.language?.toUpperCase?.() ?? '—'
-                    return (
-                      <div className="analytics-language-chip" key={`${l.language}-${l.count}`}>
-                        <span className="analytics-language-name">{pretty}</span>
-                        <span className="analytics-language-count">{l.count}</span>
-                      </div>
-                    )
-                  })
-                ) : (
-                  <div className="analytics-empty-card">
-                    Language data appears once the library has source material.
-                  </div>
-                )}
-              </div>
-            </article>
-
-            <article className="analytics-card analytics-card-stretch">
-              <header className="analytics-card-header">
-                <h3>Format Split</h3>
-                <span className="analytics-card-subtitle">Movies vs TV inventory</span>
-              </header>
-              <div
-                className="analytics-ratio-bar"
-                role="img"
-                aria-label={`Library is ${analyticsSnapshot.movieShare}% movies and ${analyticsSnapshot.tvShare}% TV shows`}
-              >
-                <div className="analytics-ratio-segment movies" style={{ width: `${analyticsSnapshot.movieShare}%` }} />
-                <div className="analytics-ratio-segment tv" style={{ width: `${analyticsSnapshot.tvShare}%` }} />
-                {analyticsSnapshot.otherShare > 0 && (
-                  <div className="analytics-ratio-segment other" style={{ width: `${analyticsSnapshot.otherShare}%` }} />
-                )}
-              </div>
-              <div className="analytics-ratio-legend">
-                <span>
-                  <span className="analytics-dot movies" />
-                  {analyticsSnapshot.totalMovies.toLocaleString()} movies
-                </span>
-                <span>
-                  <span className="analytics-dot tv" />
-                  {analyticsSnapshot.totalTvShows.toLocaleString()} series
-                </span>
-                {analyticsSnapshot.otherShare > 0 && (
-                  <span>
-                    <span className="analytics-dot other" />
-                    {Math.max(0, analyticsSnapshot.totalItems - analyticsSnapshot.totalMovies - analyticsSnapshot.totalTvShows).toLocaleString()} other
-                  </span>
-                )}
-              </div>
-            </article>
+          {/* ═══════════════════════════════════════════════════════════════════
+              TOP RATED SECTION
+              ═══════════════════════════════════════════════════════════════════ */}
+          <div className="analytics-section-divider">
+            <span className="analytics-divider-icon">⭐</span>
+            <span className="analytics-divider-text">Top Rated</span>
           </div>
+
+          <div className="analytics-two-column">
+            {/* Top Rated Movies */}
+            <div className="analytics-column-card">
+              <header className="analytics-column-header">
+                <span className="analytics-column-icon">🎬</span>
+                <h3>Top Movies</h3>
+              </header>
+              <div className="analytics-compact-list">
+                {analyticsLoading ? (
+                  <div className="analytics-loading">Loading...</div>
+                ) : topMovies.length > 0 ? (
+                  topMovies.slice(0, 5).map((item, idx) => (
+                    <button
+                      key={`top-movie-${item.id}-${idx}`}
+                      className="analytics-compact-item"
+                      onClick={() => navigateToDetail('movie', item.id)}
+                      type="button"
+                    >
+                      <span className="analytics-compact-rank">#{idx + 1}</span>
+                      <div className="analytics-compact-poster">
+                        {item.poster_path ? (
+                          <img src={getImageUrl(item.poster_path, 'w92')} alt={item.title} loading="lazy" />
+                        ) : (
+                          <div className="analytics-compact-no-poster">?</div>
+                        )}
+                      </div>
+                      <div className="analytics-compact-info">
+                        <span className="analytics-compact-title">{item.title}</span>
+                        <span className="analytics-compact-meta">
+                          ⭐ {item.consolidated_rating?.toFixed(1) ?? item.vote_average?.toFixed(1) ?? '—'}
+                          {item.review_count ? ` · ${item.review_count} reviews` : ''}
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="analytics-empty-card">No rated movies yet</div>
+                )}
+              </div>
+            </div>
+
+            {/* Top Rated Shows */}
+            <div className="analytics-column-card">
+              <header className="analytics-column-header">
+                <span className="analytics-column-icon">📺</span>
+                <h3>Top TV Shows</h3>
+              </header>
+              <div className="analytics-compact-list">
+                {analyticsLoading ? (
+                  <div className="analytics-loading">Loading...</div>
+                ) : topShows.length > 0 ? (
+                  topShows.slice(0, 5).map((item, idx) => (
+                    <button
+                      key={`top-show-${item.id}-${idx}`}
+                      className="analytics-compact-item"
+                      onClick={() => navigateToDetail('tv', item.id)}
+                      type="button"
+                    >
+                      <span className="analytics-compact-rank">#{idx + 1}</span>
+                      <div className="analytics-compact-poster">
+                        {item.poster_path ? (
+                          <img src={getImageUrl(item.poster_path, 'w92')} alt={item.title} loading="lazy" />
+                        ) : (
+                          <div className="analytics-compact-no-poster">?</div>
+                        )}
+                      </div>
+                      <div className="analytics-compact-info">
+                        <span className="analytics-compact-title">{item.title}</span>
+                        <span className="analytics-compact-meta">
+                          ⭐ {item.consolidated_rating?.toFixed(1) ?? item.vote_average?.toFixed(1) ?? '—'}
+                          {item.review_count ? ` · ${item.review_count} reviews` : ''}
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="analytics-empty-card">No rated shows yet</div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* ═══════════════════════════════════════════════════════════════════
+              COMMUNITY INSIGHTS
+              ═══════════════════════════════════════════════════════════════════ */}
+          <div className="analytics-section-divider">
+            <span className="analytics-divider-icon">👥</span>
+            <span className="analytics-divider-text">Community Insights</span>
+          </div>
+
+          <div className="analytics-two-column">
+            {/* Popular Watchlists */}
+            <div className="analytics-column-card">
+              <header className="analytics-column-header">
+                <span className="analytics-column-icon">📋</span>
+                <h3>Most Watchlisted</h3>
+              </header>
+              <div className="analytics-compact-list">
+                {analyticsLoading ? (
+                  <div className="analytics-loading">Loading...</div>
+                ) : popularWatchlists.length > 0 ? (
+                  popularWatchlists.slice(0, 5).map((item, idx) => (
+                    <button
+                      key={`watchlist-${item.id}-${idx}`}
+                      className="analytics-compact-item"
+                      onClick={() => navigateToDetail(item.media_type === 'movie' ? 'movie' : 'tv', item.id)}
+                      type="button"
+                    >
+                      <span className="analytics-compact-rank">#{idx + 1}</span>
+                      <div className="analytics-compact-poster">
+                        {item.poster_path ? (
+                          <img src={getImageUrl(item.poster_path, 'w92')} alt={item.title} loading="lazy" />
+                        ) : (
+                          <div className="analytics-compact-no-poster">?</div>
+                        )}
+                      </div>
+                      <div className="analytics-compact-info">
+                        <span className="analytics-compact-title">{item.title}</span>
+                        <span className="analytics-compact-meta">
+                          {item.watchlist_count} user{item.watchlist_count !== 1 ? 's' : ''} · {item.media_type === 'movie' ? '🎬' : '📺'}
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="analytics-empty-card">No watchlist data yet</div>
+                )}
+              </div>
+            </div>
+
+            {/* Top Reviewers */}
+            <div className="analytics-column-card">
+              <header className="analytics-column-header">
+                <span className="analytics-column-icon">✍️</span>
+                <h3>Top Reviewers</h3>
+              </header>
+              <div className="analytics-compact-list">
+                {analyticsLoading ? (
+                  <div className="analytics-loading">Loading...</div>
+                ) : activeReviewers.length > 0 ? (
+                  activeReviewers.slice(0, 5).map((reviewer, idx) => (
+                    <div
+                      key={`reviewer-${reviewer.user_id}-${idx}`}
+                      className="analytics-reviewer-item"
+                    >
+                      <span className="analytics-reviewer-rank">#{idx + 1}</span>
+                      <div className="analytics-reviewer-avatar">
+                        {reviewer.display_name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="analytics-reviewer-info">
+                        <span className="analytics-reviewer-name">{reviewer.display_name}</span>
+                        <span className="analytics-reviewer-meta">
+                          {reviewer.review_count} reviews
+                          {reviewer.avg_rating ? ` · Avg: ${reviewer.avg_rating}` : ''}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="analytics-empty-card">No reviewers yet</div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* ═══════════════════════════════════════════════════════════════════
+              CONTENT DISTRIBUTION
+              ═══════════════════════════════════════════════════════════════════ */}
+          <div className="analytics-section-divider">
+            <span className="analytics-divider-icon">📊</span>
+            <span className="analytics-divider-text">Content Distribution</span>
+          </div>
+
+          <div className="analytics-two-column">
+            {/* Genre Distribution */}
+            <div className="analytics-column-card analytics-column-card-wide">
+              <header className="analytics-column-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span className="analytics-column-icon">🎭</span>
+                  <h3>Genre Distribution</h3>
+                </div>
+                <div className="analytics-toggle-group">
+                  <button
+                    type="button"
+                    className={`analytics-toggle-btn${genreDistributionType === 'movie' ? ' active' : ''}`}
+                    onClick={() => setGenreDistributionType('movie')}
+                  >
+                    Movies
+                  </button>
+                  <button
+                    type="button"
+                    className={`analytics-toggle-btn${genreDistributionType === 'show' ? ' active' : ''}`}
+                    onClick={() => setGenreDistributionType('show')}
+                  >
+                    TV
+                  </button>
+                </div>
+              </header>
+              <div className="analytics-genre-bars">
+                {genreDistribution.length > 0 ? (
+                  (() => {
+                    const maxCount = Math.max(...genreDistribution.map(g => g.count))
+                    return genreDistribution.slice(0, 8).map((g, idx) => {
+                      const percentage = maxCount > 0 ? (g.count / maxCount) * 100 : 0
+                      return (
+                        <div className="analytics-genre-bar-row" key={`genre-dist-${g.name}-${idx}`}>
+                          <span className="analytics-genre-bar-name">{g.name}</span>
+                          <div className="analytics-genre-bar-track">
+                            <div 
+                              className="analytics-genre-bar-fill" 
+                              style={{ width: `${Math.max(percentage, 3)}%` }}
+                            />
+                          </div>
+                          <span className="analytics-genre-bar-count">{g.count}</span>
+                        </div>
+                      )
+                    })
+                  })()
+                ) : (
+                  <div className="analytics-empty-card">No genre data yet</div>
+                )}
+              </div>
+            </div>
+
+            {/* Format Split - Pie Chart */}
+            <div className="analytics-column-card">
+              <header className="analytics-column-header">
+                <span className="analytics-column-icon">🥧</span>
+                <h3>Format Split</h3>
+              </header>
+              <div className="analytics-pie-chart-wrapper">
+                <svg 
+                  className="analytics-pie-chart" 
+                  viewBox="0 0 200 200"
+                  role="img"
+                  aria-label={`Library is ${analyticsSnapshot.movieShare}% movies and ${analyticsSnapshot.tvShare}% TV shows`}
+                >
+                  {(() => {
+                    const size = 200
+                    const radius = 80
+                    const centerX = size / 2
+                    const centerY = size / 2
+                    
+                    const toRadians = (deg: number) => (deg * Math.PI) / 180
+                    const getPoint = (angle: number) => {
+                      const rad = toRadians(angle - 90)
+                      return {
+                        x: centerX + radius * Math.cos(rad),
+                        y: centerY + radius * Math.sin(rad)
+                      }
+                    }
+                    
+                    const movieAngle = (analyticsSnapshot.movieShare / 100) * 360
+                    const tvAngle = (analyticsSnapshot.tvShare / 100) * 360
+                    const otherAngle = analyticsSnapshot.otherShare > 0 ? (analyticsSnapshot.otherShare / 100) * 360 : 0
+                    
+                    let currentAngle = 0
+                    
+                    const movieStartPt = getPoint(currentAngle)
+                    const movieEndPt = getPoint(currentAngle + movieAngle)
+                    const movieLargeArc = movieAngle > 180 ? 1 : 0
+                    currentAngle += movieAngle
+                    
+                    const tvStartPt = getPoint(currentAngle)
+                    const tvEndPt = getPoint(currentAngle + tvAngle)
+                    const tvLargeArc = tvAngle > 180 ? 1 : 0
+                    currentAngle += tvAngle
+                    
+                    return (
+                      <>
+                        <path
+                          d={`M ${centerX} ${centerY} L ${movieStartPt.x} ${movieStartPt.y} A ${radius} ${radius} 0 ${movieLargeArc} 1 ${movieEndPt.x} ${movieEndPt.y} Z`}
+                          fill="url(#movieGradient)"
+                          className="analytics-pie-segment movies"
+                        />
+                        <path
+                          d={`M ${centerX} ${centerY} L ${tvStartPt.x} ${tvStartPt.y} A ${radius} ${radius} 0 ${tvLargeArc} 1 ${tvEndPt.x} ${tvEndPt.y} Z`}
+                          fill="url(#tvGradient)"
+                          className="analytics-pie-segment tv"
+                        />
+                        {analyticsSnapshot.otherShare > 0 && (() => {
+                          const otherStartPt = getPoint(currentAngle)
+                          const otherEndPt = getPoint(360)
+                          const otherLargeArc = otherAngle > 180 ? 1 : 0
+                          return (
+                            <path
+                              d={`M ${centerX} ${centerY} L ${otherStartPt.x} ${otherStartPt.y} A ${radius} ${radius} 0 ${otherLargeArc} 1 ${otherEndPt.x} ${otherEndPt.y} Z`}
+                              fill="url(#otherGradient)"
+                              className="analytics-pie-segment other"
+                            />
+                          )
+                        })()}
+                        <defs>
+                          <linearGradient id="movieGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stopColor="#f43f5e" />
+                            <stop offset="100%" stopColor="#ef4444" />
+                          </linearGradient>
+                          <linearGradient id="tvGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stopColor="#6366f1" />
+                            <stop offset="100%" stopColor="#8b5cf6" />
+                          </linearGradient>
+                          <linearGradient id="otherGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stopColor="#22c55e" />
+                            <stop offset="100%" stopColor="#14b8a6" />
+                          </linearGradient>
+                        </defs>
+                        <circle cx={centerX} cy={centerY} r={radius * 0.55} fill="rgba(18, 19, 26, 0.95)" />
+                        <text x={centerX} y={centerY - 6} textAnchor="middle" fill="white" fontSize="20" fontWeight="800">
+                          {analyticsSnapshot.totalItems.toLocaleString()}
+                        </text>
+                        <text x={centerX} y={centerY + 12} textAnchor="middle" fill="rgba(255,255,255,0.6)" fontSize="10">
+                          Total
+                        </text>
+                      </>
+                    )
+                  })()}
+                </svg>
+              </div>
+              <div className="analytics-pie-legend">
+                <div className="analytics-pie-legend-item">
+                  <span className="analytics-dot movies" />
+                  <span className="analytics-pie-legend-label">Movies {analyticsSnapshot.movieShare}%</span>
+                </div>
+                <div className="analytics-pie-legend-item">
+                  <span className="analytics-dot tv" />
+                  <span className="analytics-pie-legend-label">TV {analyticsSnapshot.tvShare}%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Language Footprint */}
+          <div className="analytics-full-width-card">
+            <header className="analytics-column-header">
+              <span className="analytics-column-icon">🌍</span>
+              <h3>Language Footprint</h3>
+              <span className="analytics-header-badge">{analyticsSnapshot.languageCount} languages</span>
+            </header>
+            <div className="analytics-language-grid">
+              {analyticsSnapshot.languages.length > 0 ? (
+                analyticsSnapshot.languages.slice(0, 16).map((l: any) => {
+                  const pretty = formatLanguageLabel(l.language) ?? l.language?.toUpperCase?.() ?? '—'
+                  return (
+                    <div className="analytics-language-chip" key={`${l.language}-${l.count}`}>
+                      <span className="analytics-language-name">{pretty}</span>
+                      <span className="analytics-language-count">{l.count}</span>
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="analytics-empty-card">No language data yet</div>
+              )}
+            </div>
+          </div>
+
+          {/* ═══════════════════════════════════════════════════════════════════
+              CONTRIBUTION OPPORTUNITIES
+              ═══════════════════════════════════════════════════════════════════ */}
+          {unreviewedTitles.length > 0 && (
+            <>
+              <div className="analytics-section-divider">
+                <span className="analytics-divider-icon">💡</span>
+                <span className="analytics-divider-text">Needs Your Review</span>
+              </div>
+
+              <div className="analytics-full-width-card">
+                <header className="analytics-column-header">
+                  <span className="analytics-column-icon">📝</span>
+                  <h3>Unreviewed Titles</h3>
+                  <span className="analytics-header-badge">Be the first to review!</span>
+                </header>
+                <div className="analytics-unreviewed-grid">
+                  {unreviewedTitles.slice(0, 6).map((item, idx) => (
+                    <button
+                      key={`unreviewed-${item.id}-${idx}`}
+                      className="analytics-unreviewed-card"
+                      onClick={() => navigateToDetail(item.media_type, item.id)}
+                      type="button"
+                    >
+                      <div className="analytics-unreviewed-poster">
+                        {item.poster_path ? (
+                          <img src={getImageUrl(item.poster_path, 'w185')} alt={item.title} loading="lazy" />
+                        ) : (
+                          <div className="analytics-unreviewed-no-poster">No Image</div>
+                        )}
+                      </div>
+                      <div className="analytics-unreviewed-info">
+                        <span className="analytics-unreviewed-title">{item.title}</span>
+                        <span className="analytics-unreviewed-meta">
+                          {item.media_type === 'movie' ? '🎬' : '📺'} 
+                          {item.vote_average ? ` TMDb: ${item.vote_average.toFixed(1)}` : ' No rating yet'}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ═══════════════════════════════════════════════════════════════════
+              ADMIN ANALYTICS (Admin Only)
+              ═══════════════════════════════════════════════════════════════════ */}
+          {currentUser?.is_admin && genreRatings.length > 0 && (
+            <>
+              <div className="analytics-section-divider analytics-admin-divider">
+                <span className="analytics-divider-icon">🔧</span>
+                <span className="analytics-divider-text">Admin Analytics</span>
+              </div>
+
+              <div className="analytics-full-width-card analytics-admin-card">
+                <header className="analytics-column-header">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span className="analytics-column-icon">⭐</span>
+                    <h3>Genre Ratings</h3>
+                  </div>
+                  <div className="analytics-toggle-group">
+                    <button
+                      type="button"
+                      className={`analytics-toggle-btn${genreRatingsType === 'movie' ? ' active' : ''}`}
+                      onClick={() => setGenreRatingsType('movie')}
+                    >
+                      Movies
+                    </button>
+                    <button
+                      type="button"
+                      className={`analytics-toggle-btn${genreRatingsType === 'show' ? ' active' : ''}`}
+                      onClick={() => setGenreRatingsType('show')}
+                    >
+                      TV
+                    </button>
+                  </div>
+                </header>
+                <div className="analytics-genre-ratings-table">
+                  <div className="analytics-table-header">
+                    <span>Genre</span>
+                    <span>Avg Rating</span>
+                    <span>Reviews</span>
+                  </div>
+                  {genreRatings.slice(0, 10).map((g, idx) => (
+                    <div className="analytics-table-row" key={`genre-rating-${g.name}-${idx}`}>
+                      <span className="analytics-table-genre">{g.name}</span>
+                      <span className="analytics-table-rating">
+                        ⭐ {g.avg_rating?.toFixed(1) ?? '—'}
+                      </span>
+                      <span className="analytics-table-count">{g.review_count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </section>
       )}
 

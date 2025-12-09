@@ -53,11 +53,30 @@ def ensure_extended_columns(conn: sqlite3.Connection) -> None:
         if not has_column("shows", "original_language"):
             conn.execute("ALTER TABLE shows ADD COLUMN original_language TEXT")
 
+        # Add extended people columns
+        if not has_column("people", "birthday"):
+            conn.execute("ALTER TABLE people ADD COLUMN birthday TEXT")
+        if not has_column("people", "deathday"):
+            conn.execute("ALTER TABLE people ADD COLUMN deathday TEXT")
+        if not has_column("people", "place_of_birth"):
+            conn.execute("ALTER TABLE people ADD COLUMN place_of_birth TEXT")
+        if not has_column("people", "biography"):
+            conn.execute("ALTER TABLE people ADD COLUMN biography TEXT")
+        if not has_column("people", "imdb_id"):
+            conn.execute("ALTER TABLE people ADD COLUMN imdb_id TEXT")
+        if not has_column("people", "instagram_id"):
+            conn.execute("ALTER TABLE people ADD COLUMN instagram_id TEXT")
+        if not has_column("people", "twitter_id"):
+            conn.execute("ALTER TABLE people ADD COLUMN twitter_id TEXT")
+        if not has_column("people", "facebook_id"):
+            conn.execute("ALTER TABLE people ADD COLUMN facebook_id TEXT")
+
 
 class TMDbClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.session = requests.Session()
+        self._person_cache = {}  # Cache to avoid refetching person details
 
     def get(self, path: str, **params):
         params["api_key"] = self.api_key
@@ -65,6 +84,19 @@ class TMDbClient:
         resp = self.session.get(url, params=params, timeout=25)
         resp.raise_for_status()
         return resp.json()
+    
+    def fetch_person_details(self, tmdb_person_id: int) -> dict:
+        """Fetch full person details including biography and external IDs."""
+        if tmdb_person_id in self._person_cache:
+            return self._person_cache[tmdb_person_id]
+        
+        try:
+            person_data = self.get(f"/person/{tmdb_person_id}", append_to_response="external_ids")
+            self._person_cache[tmdb_person_id] = person_data
+            return person_data
+        except Exception as e:
+            print(f"Warning: Could not fetch details for person {tmdb_person_id}: {e}", file=sys.stderr)
+            return {}
 
 
 def upsert_genres(conn: sqlite3.Connection, payload: Iterable[dict]):
@@ -155,16 +187,43 @@ def upsert_show(conn: sqlite3.Connection, data: dict):
     )
 
 
-def upsert_person(conn: sqlite3.Connection, cast: dict):
+def upsert_person(conn: sqlite3.Connection, person_data: dict):
+    """Upsert person with extended details."""
+    # Extract external IDs if present
+    external_ids = person_data.get("external_ids", {})
+    
     conn.execute(
         """
-        INSERT INTO people (tmdb_person_id, name, profile_path)
-        VALUES (?, ?, ?)
+        INSERT INTO people (
+            tmdb_person_id, name, profile_path, birthday, deathday, 
+            place_of_birth, biography, imdb_id, instagram_id, twitter_id, facebook_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tmdb_person_id) DO UPDATE SET
             name = excluded.name,
-            profile_path = excluded.profile_path
+            profile_path = excluded.profile_path,
+            birthday = COALESCE(excluded.birthday, birthday),
+            deathday = COALESCE(excluded.deathday, deathday),
+            place_of_birth = COALESCE(excluded.place_of_birth, place_of_birth),
+            biography = COALESCE(excluded.biography, biography),
+            imdb_id = COALESCE(excluded.imdb_id, imdb_id),
+            instagram_id = COALESCE(excluded.instagram_id, instagram_id),
+            twitter_id = COALESCE(excluded.twitter_id, twitter_id),
+            facebook_id = COALESCE(excluded.facebook_id, facebook_id)
         """,
-        (cast.get("id"), cast.get("name"), cast.get("profile_path")),
+        (
+            person_data.get("id"),
+            person_data.get("name"),
+            person_data.get("profile_path"),
+            person_data.get("birthday"),
+            person_data.get("deathday"),
+            person_data.get("place_of_birth"),
+            person_data.get("biography"),
+            external_ids.get("imdb_id"),
+            external_ids.get("instagram_id"),
+            external_ids.get("twitter_id"),
+            external_ids.get("facebook_id"),
+        ),
     )
 
 
@@ -315,7 +374,15 @@ def process_movies(conn: sqlite3.Connection, client: TMDbClient, limit: int):
             link_movie_genres(conn, detail.get("id"), detail.get("genres"))
             credits = detail.get("credits", {}).get("cast", []) or []
             for cast in credits[:25]:
-                upsert_person(conn, cast)
+                # Fetch full person details from TMDb
+                person_details = client.fetch_person_details(cast.get("id"))
+                # Merge cast info with person details
+                person_details.update({
+                    "id": cast.get("id"),
+                    "name": cast.get("name"),
+                    "profile_path": cast.get("profile_path"),
+                })
+                upsert_person(conn, person_details)
                 attach_movie_cast(conn, detail["id"], cast)
 
 
@@ -333,7 +400,15 @@ def process_shows(conn: sqlite3.Connection, client: TMDbClient, limit: int, epis
             link_show_genres(conn, detail.get("id"), detail.get("genres"))
             credits = detail.get("aggregate_credits", {}).get("cast", []) or []
             for cast in credits[:25]:
-                upsert_person(conn, cast)
+                # Fetch full person details from TMDb
+                person_details = client.fetch_person_details(cast.get("id"))
+                # Merge cast info with person details
+                person_details.update({
+                    "id": cast.get("id"),
+                    "name": cast.get("name"),
+                    "profile_path": cast.get("profile_path"),
+                })
+                upsert_person(conn, person_details)
                 attach_show_cast(conn, detail["id"], cast)
 
             seasons = detail.get("seasons") or []

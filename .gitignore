@@ -8,3 +8,5 @@ movie_tracker.db
 web/node_modules/
 imageofmovie/*
 !imageofmovie/.gitkeep
+docs/*
+nul

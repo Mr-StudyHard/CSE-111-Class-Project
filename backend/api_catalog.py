@@ -54,7 +54,13 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
                m.tmdb_vote_avg AS score,
                m.popularity,
                CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
-               GROUP_CONCAT(DISTINCT g.name) AS genres
+               GROUP_CONCAT(DISTINCT g.name) AS genres,
+               (
+                   SELECT AVG(rating) FROM reviews WHERE movie_id = m.movie_id
+               ) AS user_avg_rating,
+               (
+                   SELECT COUNT(*) FROM reviews WHERE movie_id = m.movie_id
+               ) AS review_count
         FROM movies m
         INNER JOIN movie_genres mg ON mg.movie_id = m.movie_id
         INNER JOIN genres g ON g.genre_id = mg.genre_id
@@ -71,7 +77,13 @@ def _build_trending_sql(period: str) -> tuple[str, list]:
                s.tmdb_vote_avg AS score,
                s.popularity,
                s.first_air_date AS release_date,
-               GROUP_CONCAT(DISTINCT g.name) AS genres
+               GROUP_CONCAT(DISTINCT g.name) AS genres,
+               (
+                   SELECT AVG(rating) FROM reviews WHERE show_id = s.show_id
+               ) AS user_avg_rating,
+               (
+                   SELECT COUNT(*) FROM reviews WHERE show_id = s.show_id
+               ) AS review_count
         FROM shows s
         INNER JOIN show_genres sg ON sg.show_id = s.show_id
         INNER JOIN genres g ON g.genre_id = sg.genre_id
@@ -103,6 +115,46 @@ def _get_int(param: str | None, default: int, minimum: int = 1, maximum: int | N
     if maximum is not None:
         value = min(value, maximum)
     return value
+
+
+def calculate_consolidated_rating(
+    tmdb_rating: float | None,
+    user_rating: float | None,
+    user_count: int,
+    confidence: float = 5.0
+) -> float | None:
+    """
+    Calculate consolidated rating using Bayesian average.
+    
+    Combines TMDb rating and user ratings into a single rating that:
+    - Uses TMDb rating for titles with no user reviews
+    - Smoothly transitions to user-weighted rating as review count increases
+    - Prevents titles with few reviews from dominating rankings
+    - Treats 0.0 TMDb rating as invalid (unreleased/unrated) and uses user rating directly
+    
+    Args:
+        tmdb_rating: TMDb vote average (0-10 scale)
+        user_rating: Average user rating from reviews (0-10 scale)
+        user_count: Number of user reviews
+        confidence: Confidence constant - how many reviews worth of weight to give TMDb (default 5)
+    
+    Returns:
+        Consolidated rating (0-10 scale) or None if both ratings unavailable
+    """
+    # Treat 0.0 TMDb rating as invalid/unavailable (unreleased movies/shows)
+    if tmdb_rating is None or tmdb_rating == 0.0:
+        return user_rating if user_count > 0 else None
+    
+    if user_count == 0:
+        return tmdb_rating
+    
+    if user_rating is None:
+        return tmdb_rating
+    
+    # Bayesian average: (C * tmdb_rating + user_rating * user_count) / (C + user_count)
+    numerator = (confidence * tmdb_rating) + (user_rating * user_count)
+    denominator = confidence + user_count
+    return numerator / denominator
 
 
 def _summary_payload() -> dict[str, Any]:
@@ -190,11 +242,37 @@ def _get_or_create_genre_id(name: str) -> int:
     return int(cur.lastrowid)
 
 
+def _ensure_review_reactions_table() -> None:
+    """
+    Ensure the review_reactions table exists.
+    Creates it if it doesn't exist (for databases created before this feature).
+    """
+    conn = get_db()
+    try:
+        # Check if table exists
+        conn.execute("SELECT 1 FROM review_reactions LIMIT 1")
+    except Exception:
+        # Table doesn't exist, create it
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS review_reactions (
+                reaction_id     INTEGER PRIMARY KEY,
+                review_id       INTEGER NOT NULL REFERENCES reviews(review_id) ON DELETE CASCADE,
+                user_id         INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                emote_type      TEXT NOT NULL CHECK (emote_type IN ('👍', '❤️', '😂', '😮', '😢', '🔥')),
+                created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (review_id, user_id, emote_type)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_review_reactions_review ON review_reactions(review_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_review_reactions_user ON review_reactions(user_id)")
+        conn.commit()
+
+
 def _ensure_auth_bootstrap() -> None:
     """
-    Make sure the users table has password columns, is_admin column, and seed demo credentials.
+    Make sure the users table has password columns, is_admin column, display_name column, and seed demo credentials.
 
-    We add `password_hash`, `password_plain`, and `is_admin` columns on the fly for older
+    We add `password_hash`, `password_plain`, `is_admin`, and `display_name` columns on the fly for older
     databases, then guarantee the default Admin account exists. Any rows that
     still lack credentials receive a fallback placeholder so the login flow
     behaves deterministically.
@@ -211,6 +289,9 @@ def _ensure_auth_bootstrap() -> None:
     if "is_admin" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
         altered = True
+    if "display_name" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+        altered = True
     if altered:
         conn.commit()
 
@@ -218,18 +299,31 @@ def _ensure_auth_bootstrap() -> None:
     admin_password = "Admin"
     admin_hash = generate_password_hash(admin_password)
     existing_admin = conn.execute(
-        "SELECT user_id FROM users WHERE lower(email) = lower(?) LIMIT 1",
+        "SELECT user_id, password_hash, password_plain FROM users WHERE lower(email) = lower(?) LIMIT 1",
         (admin_email,),
     ).fetchone()
+    print(f"[DEBUG BOOTSTRAP] existing_admin: {dict(existing_admin) if existing_admin else None}")
     if existing_admin:
-        conn.execute(
-            """
-            UPDATE users
-            SET password_hash = ?, password_plain = ?, is_admin = 1
-            WHERE user_id = ?
-            """,
-            (admin_hash, admin_password, existing_admin["user_id"]),
-        )
+        print(f"[DEBUG BOOTSTRAP] password_hash is None: {existing_admin['password_hash'] is None}")
+        print(f"[DEBUG BOOTSTRAP] password_plain is None: {existing_admin['password_plain'] is None}")
+        print(f"[DEBUG BOOTSTRAP] password_plain value: '{existing_admin['password_plain']}'")
+        # Preserve user-changed passwords; only set defaults if none exist
+        if existing_admin["password_hash"] is None and existing_admin["password_plain"] is None:
+            print(f"[DEBUG BOOTSTRAP] Resetting admin password to default")
+            conn.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, password_plain = ?, is_admin = 1
+                WHERE user_id = ?
+                """,
+                (admin_hash, admin_password, existing_admin["user_id"]),
+            )
+        else:
+            print(f"[DEBUG BOOTSTRAP] NOT resetting admin password - already has credentials")
+            conn.execute(
+                "UPDATE users SET is_admin = 1 WHERE user_id = ?",
+                (existing_admin["user_id"],),
+            )
     else:
         conn.execute(
             """
@@ -362,10 +456,17 @@ def _get_current_user() -> dict | None:
         )
         if rows:
             row = dict(rows[0])
+            # Handle is_admin: SQLite stores it as INTEGER (0 or 1), convert to boolean
+            is_admin_value = row.get("is_admin")
+            if is_admin_value is None:
+                is_admin_bool = False
+            else:
+                # Convert to boolean: any non-zero value is True
+                is_admin_bool = bool(int(is_admin_value) if is_admin_value else 0)
             return {
                 "user_id": row["user_id"],
                 "email": row["email"],
-                "is_admin": bool(row.get("is_admin", 0)),
+                "is_admin": is_admin_bool,
             }
     except (ValueError, IndexError):
         pass
@@ -394,14 +495,19 @@ def get_user_settings():
     Requires authentication via Authorization header.
     """
     try:
+        # Debug logging
+        auth_header = request.headers.get("Authorization", "")
+        print(f"[DEBUG] GET /api/user/settings - Auth header: {auth_header[:50] if len(auth_header) > 50 else auth_header}")
+        
         _ensure_auth_bootstrap()  # Ensure is_admin column exists
         user = _get_current_user()
         if not user:
+            print(f"[DEBUG] GET /api/user/settings - No user found, returning 401")
             return jsonify({"ok": False, "error": "Authentication required"}), 401
         
         rows = query(
             """
-            SELECT user_id, email, created_at, is_admin
+            SELECT user_id, email, created_at, is_admin, display_name
             FROM users
             WHERE user_id = ?
             LIMIT 1
@@ -413,8 +519,10 @@ def get_user_settings():
             return jsonify({"ok": False, "error": "User not found"}), 404
         
         row = dict(rows[0])
-        # Derive display_name from email (since display_name column was removed)
-        display_name = row.get("email", "").split("@", 1)[0] if "@" in row.get("email", "") else row.get("email", "")
+        # Use display_name if set, otherwise derive from email
+        display_name = row.get("display_name")
+        if not display_name:
+            display_name = row.get("email", "").split("@", 1)[0] if "@" in row.get("email", "") else row.get("email", "")
         
         return jsonify({
             "ok": True,
@@ -426,8 +534,10 @@ def get_user_settings():
         })
     except Exception as exc:
         import traceback
-        print(f"Error in get_user_settings: {traceback.format_exc()}")
-        return jsonify({"ok": False, "error": f"Server error: {str(exc)}"}), 500
+        error_trace = traceback.format_exc()
+        print(f"Error in get_user_settings: {error_trace}")
+        # Return 500 with detailed error for debugging
+        return jsonify({"ok": False, "error": f"Server error: {str(exc)}", "trace": error_trace}), 500
 
 
 @app.put("/api/user/settings")
@@ -451,15 +561,19 @@ def update_user_settings():
     
     payload = request.get_json(silent=True) or {}
     current_password = (payload.get("current_password") or "").strip()
-    display_name = (payload.get("display_name") or "").strip()  # Accept but ignore (column removed)
+    display_name = (payload.get("display_name") or "").strip()
     new_email = (payload.get("new_email") or "").strip()
     new_password = (payload.get("new_password") or "").strip()
     
     if not current_password:
         return jsonify({"ok": False, "error": "Current password is required"}), 400
     
-    if not new_email and not new_password:
-        # display_name is ignored, so don't count it as a change
+    # Check if any changes are being made
+    has_display_name_change = bool(display_name)
+    has_email_change = bool(new_email)
+    has_password_change = bool(new_password)
+    
+    if not has_display_name_change and not has_email_change and not has_password_change:
         return jsonify({"ok": False, "error": "No changes specified"}), 400
     
     conn = get_db()
@@ -494,8 +608,15 @@ def update_user_settings():
         updates = []
         params = []
         
+        # Update display_name if provided
+        if has_display_name_change:
+            if len(display_name) > 50:
+                return jsonify({"ok": False, "error": "Display name must be 50 characters or less"}), 400
+            updates.append("display_name = ?")
+            params.append(display_name)
+        
         # Update email if provided
-        if new_email:
+        if has_email_change:
             # Check if email already exists for another user
             existing = conn.execute(
                 "SELECT user_id FROM users WHERE lower(email) = lower(?) AND user_id != ?",
@@ -509,8 +630,13 @@ def update_user_settings():
             params.append(new_email)
         
         # Update password if provided
-        if new_password:
+        if has_password_change:
+            if len(new_password) < 1:
+                return jsonify({"ok": False, "error": "Password cannot be empty"}), 400
             new_hash = generate_password_hash(new_password)
+            print(f"[DEBUG] Updating password for user_id={user['user_id']}")
+            print(f"[DEBUG] New password (plain): {new_password}")
+            print(f"[DEBUG] New password hash: {new_hash[:50]}...")
             updates.append("password_hash = ?")
             params.append(new_hash)
             updates.append("password_plain = ?")
@@ -519,8 +645,57 @@ def update_user_settings():
         if updates:
             params.append(user["user_id"])
             sql = f"UPDATE users SET {', '.join(updates)} WHERE user_id = ?"
-            conn.execute(sql, tuple(params))
-            conn.commit()
+            print(f"[DEBUG] Executing SQL: {sql}")
+            print(f"[DEBUG] Params count: {len(params)}, user_id: {user['user_id']}")
+            print(f"[DEBUG] Params values (masked): {[p if not isinstance(p, str) or len(p) < 10 else p[:3] + '...' for p in params[:-1]]}")
+            try:
+                result = conn.execute(sql, tuple(params))
+                affected_rows = result.rowcount
+                print(f"[DEBUG] UPDATE affected {affected_rows} row(s)")
+                conn.commit()
+                print(f"[DEBUG] Commit successful")
+                
+                # Force close connection to ensure changes are flushed to disk
+                # This is needed because OneDrive can cause sync issues
+                from flask import g
+                if "sqlite_conn" in g:
+                    g.sqlite_conn.close()
+                    del g.sqlite_conn
+                
+                # Reopen connection and verify
+                conn2 = get_db()
+                try:
+                    db_info = conn2.execute("PRAGMA database_list").fetchone()
+                    if db_info:
+                        print(f"[DEBUG] Database file: {db_info[2] if len(db_info) > 2 else 'unknown'}")
+                except:
+                    pass
+                
+                # Verify with fresh connection
+                verify_cursor = conn2.execute(
+                    "SELECT password_hash, password_plain FROM users WHERE user_id = ?",
+                    (user["user_id"],)
+                )
+                verify_rows = verify_cursor.fetchall()
+                if verify_rows:
+                    verify_data = dict(verify_rows[0])
+                    print(f"[DEBUG] After update (fresh connection) - password_plain: '{verify_data.get('password_plain')}'")
+                    if has_password_change:
+                        hash_matches = check_password_hash(verify_data.get('password_hash') or '', new_password)
+                        plain_matches = verify_data.get('password_plain') == new_password
+                        print(f"[DEBUG] After update - password_hash matches: {hash_matches}")
+                        print(f"[DEBUG] After update - password_plain matches: {plain_matches}")
+                        if not hash_matches and not plain_matches:
+                            print(f"[ERROR] Password update verification FAILED!")
+                            print(f"[ERROR] Expected password: '{new_password}'")
+                            print(f"[ERROR] Stored password_plain: '{verify_data.get('password_plain')}'")
+                else:
+                    print(f"[ERROR] Could not verify update - user not found")
+            except Exception as update_exc:
+                print(f"[ERROR] Exception during UPDATE: {update_exc}")
+                import traceback
+                print(f"[ERROR] Traceback: {traceback.format_exc()}")
+                raise
         
         return jsonify({"ok": True, "message": "Settings updated successfully"})
     
@@ -547,7 +722,7 @@ def get_user_profile():
         # Basic user info
         rows = query(
             """
-            SELECT user_id, email, created_at
+            SELECT user_id, email, created_at, display_name
             FROM users
             WHERE user_id = ?
             LIMIT 1
@@ -557,7 +732,10 @@ def get_user_profile():
         if not rows:
             return jsonify({"ok": False, "error": "User not found"}), 404
         info = dict(rows[0])
-        display_name = info.get("email", "").split("@", 1)[0] if "@" in info.get("email", "") else info.get("email", "")
+        # Use display_name if set, otherwise derive from email
+        display_name = info.get("display_name")
+        if not display_name:
+            display_name = info.get("email", "").split("@", 1)[0] if "@" in info.get("email", "") else info.get("email", "")
 
         # Stats: separate movie and TV statistics
         # Movie stats
@@ -610,23 +788,23 @@ def get_user_profile():
         )
         tv_discussion_count = int(tv_discussion_rows[0]["discussion_count"] or 0) if tv_discussion_rows else 0
 
-        # Favorites: top 5 rated items by this user with poster images
+        # Favorites: items from favorites table with poster images
+        _ensure_favorites_table()  # Ensure table exists
         favorite_rows = query(
             """
             SELECT 
-                r.rating,
-                r.movie_id,
-                r.show_id,
+                f.movie_id,
+                f.show_id,
+                f.added_at,
                 m.title AS movie_title,
                 m.poster_path AS movie_poster,
                 s.title AS show_title,
                 s.poster_path AS show_poster
-            FROM reviews r
-            LEFT JOIN movies m ON r.movie_id = m.movie_id
-            LEFT JOIN shows s ON r.show_id = s.show_id
-            WHERE r.user_id = ? AND r.rating IS NOT NULL
-            ORDER BY r.rating DESC, r.created_at DESC
-            LIMIT 5
+            FROM favorites f
+            LEFT JOIN movies m ON f.movie_id = m.movie_id
+            LEFT JOIN shows s ON f.show_id = s.show_id
+            WHERE f.user_id = ?
+            ORDER BY f.added_at DESC
             """,
             (user["user_id"],),
         )
@@ -640,7 +818,6 @@ def get_user_profile():
                 {
                     "title": title,
                     "media_type": media_type,
-                    "rating": float(data.get("rating") or 0),
                     "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
                     "poster_path": poster_path,
                 }
@@ -688,6 +865,46 @@ def get_user_profile():
         movie_watchlist = [w for w in watchlist if w["media_type"] == "movie"]
         tv_watchlist = [w for w in watchlist if w["media_type"] == "tv"]
 
+        # Recent reviews (last 10)
+        recent_review_rows = query(
+            """
+            SELECT 
+                r.review_id,
+                r.rating,
+                r.content,
+                r.created_at,
+                r.movie_id,
+                r.show_id,
+                m.title AS movie_title,
+                m.poster_path AS movie_poster,
+                s.title AS show_title,
+                s.poster_path AS show_poster
+            FROM reviews r
+            LEFT JOIN movies m ON r.movie_id = m.movie_id
+            LEFT JOIN shows s ON r.show_id = s.show_id
+            WHERE r.user_id = ?
+            ORDER BY r.created_at DESC
+            LIMIT 10
+            """,
+            (user["user_id"],),
+        )
+        recent_reviews = []
+        for row in recent_review_rows:
+            data = dict(row)
+            title = data.get("movie_title") or data.get("show_title") or "Untitled"
+            poster_path = data.get("movie_poster") or data.get("show_poster")
+            media_type = "movie" if data.get("movie_id") is not None else "tv"
+            recent_reviews.append({
+                "review_id": data["review_id"],
+                "title": title,
+                "media_type": media_type,
+                "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
+                "rating": float(data["rating"]) if data.get("rating") is not None else None,
+                "content": data.get("content"),
+                "created_at": data.get("created_at"),
+                "poster_path": poster_path,
+            })
+
         return jsonify(
             {
                 "ok": True,
@@ -719,11 +936,220 @@ def get_user_profile():
                     "movies": movie_watchlist,
                     "tv": tv_watchlist,
                 },
+                "recent_reviews": recent_reviews,
             }
         )
     except Exception as exc:
         import traceback
         print(f"Error in get_user_profile: {traceback.format_exc()}")
+        return jsonify({"ok": False, "error": f"Server error: {str(exc)}"}), 500
+
+
+@app.get("/api/users/<int:user_id>/public-profile")
+def get_public_user_profile(user_id: int):
+    """
+    Get a user's public profile (viewable by anyone).
+    Shows: display name, join date, stats, favorites, recent reviews, and watchlist.
+    Does NOT show: email or other private data.
+    """
+    try:
+        # Get basic user info
+        rows = query(
+            """
+            SELECT user_id, email, display_name, created_at
+            FROM users
+            WHERE user_id = ?
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        if not rows:
+            return jsonify({"ok": False, "error": "User not found"}), 404
+        
+        info = dict(rows[0])
+        # Use display_name if set, otherwise derive from email
+        if info.get("display_name"):
+            display_name = info["display_name"]
+        elif info.get("email") and "@" in info["email"]:
+            display_name = info["email"].split("@", 1)[0]
+        else:
+            display_name = f"User {user_id}"
+
+        # Stats: review counts and averages
+        movie_stats = query(
+            """
+            SELECT COUNT(*) AS review_count, AVG(rating) AS avg_rating
+            FROM reviews
+            WHERE user_id = ? AND movie_id IS NOT NULL
+            """,
+            (user_id,),
+        )
+        movie_review_count = int(movie_stats[0]["review_count"] or 0) if movie_stats else 0
+        movie_avg_rating = round(float(movie_stats[0]["avg_rating"] or 0), 1) if movie_stats and movie_stats[0]["avg_rating"] else None
+
+        tv_stats = query(
+            """
+            SELECT COUNT(*) AS review_count, AVG(rating) AS avg_rating
+            FROM reviews
+            WHERE user_id = ? AND show_id IS NOT NULL
+            """,
+            (user_id,),
+        )
+        tv_review_count = int(tv_stats[0]["review_count"] or 0) if tv_stats else 0
+        tv_avg_rating = round(float(tv_stats[0]["avg_rating"] or 0), 1) if tv_stats and tv_stats[0]["avg_rating"] else None
+
+        total_reviews = movie_review_count + tv_review_count
+        
+        # Calculate overall average rating
+        overall_avg = None
+        if total_reviews > 0:
+            all_ratings = query(
+                """
+                SELECT AVG(rating) AS avg_rating
+                FROM reviews
+                WHERE user_id = ? AND rating IS NOT NULL
+                """,
+                (user_id,),
+            )
+            if all_ratings and all_ratings[0]["avg_rating"]:
+                overall_avg = round(float(all_ratings[0]["avg_rating"]), 1)
+
+        # Favorites: items from favorites table with poster images
+        _ensure_favorites_table()  # Ensure table exists
+        favorite_rows = query(
+            """
+            SELECT 
+                f.movie_id,
+                f.show_id,
+                f.added_at,
+                m.title AS movie_title,
+                m.poster_path AS movie_poster,
+                s.title AS show_title,
+                s.poster_path AS show_poster
+            FROM favorites f
+            LEFT JOIN movies m ON f.movie_id = m.movie_id
+            LEFT JOIN shows s ON f.show_id = s.show_id
+            WHERE f.user_id = ?
+            ORDER BY f.added_at DESC
+            """,
+            (user_id,),
+        )
+        favorites = []
+        for row in favorite_rows:
+            data = dict(row)
+            title = data.get("movie_title") or data.get("show_title") or "Untitled"
+            poster_path = data.get("movie_poster") or data.get("show_poster")
+            media_type = "movie" if data.get("movie_id") is not None else "tv"
+            favorites.append({
+                "title": title,
+                "media_type": media_type,
+                "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
+                "poster_path": poster_path,
+            })
+
+        # Recent reviews (last 10)
+        recent_reviews = query(
+            """
+            SELECT 
+                r.review_id,
+                r.rating,
+                r.content,
+                r.created_at,
+                r.movie_id,
+                r.show_id,
+                m.title AS movie_title,
+                m.poster_path AS movie_poster,
+                s.title AS show_title,
+                s.poster_path AS show_poster
+            FROM reviews r
+            LEFT JOIN movies m ON r.movie_id = m.movie_id
+            LEFT JOIN shows s ON r.show_id = s.show_id
+            WHERE r.user_id = ?
+            ORDER BY r.created_at DESC
+            LIMIT 10
+            """,
+            (user_id,),
+        )
+        reviews = []
+        for row in recent_reviews:
+            data = dict(row)
+            title = data.get("movie_title") or data.get("show_title") or "Untitled"
+            poster_path = data.get("movie_poster") or data.get("show_poster")
+            media_type = "movie" if data.get("movie_id") is not None else "tv"
+            reviews.append({
+                "review_id": data["review_id"],
+                "title": title,
+                "media_type": media_type,
+                "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
+                "rating": float(data["rating"]) if data.get("rating") is not None else None,
+                "content": data.get("content"),
+                "created_at": data.get("created_at"),
+                "poster_path": poster_path,
+            })
+
+        # Watchlist items with poster images
+        watchlist_rows = query(
+            """
+            SELECT
+                w.user_id,
+                w.movie_id,
+                w.show_id,
+                w.added_at,
+                m.title AS movie_title,
+                m.poster_path AS movie_poster,
+                s.title AS show_title,
+                s.poster_path AS show_poster
+            FROM watchlists w
+            LEFT JOIN movies m ON w.movie_id = m.movie_id
+            LEFT JOIN shows s ON w.show_id = s.show_id
+            WHERE w.user_id = ?
+            ORDER BY w.added_at DESC
+            """,
+            (user_id,),
+        )
+        watchlist = []
+        for row in watchlist_rows:
+            data = dict(row)
+            title = data.get("movie_title") or data.get("show_title") or "Untitled"
+            poster_path = data.get("movie_poster") or data.get("show_poster")
+            media_type = "movie" if data.get("movie_id") is not None else "tv"
+            watchlist.append({
+                "title": title,
+                "media_type": media_type,
+                "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
+                "added_at": data.get("added_at"),
+                "poster_path": poster_path,
+            })
+
+        # Separate watchlist by type
+        movie_watchlist = [w for w in watchlist if w["media_type"] == "movie"]
+        tv_watchlist = [w for w in watchlist if w["media_type"] == "tv"]
+
+        return jsonify({
+            "ok": True,
+            "user": {
+                "user_id": user_id,
+                "display_name": display_name,
+                "created_at": info.get("created_at"),
+            },
+            "stats": {
+                "total_reviews": total_reviews,
+                "movie_reviews": movie_review_count,
+                "tv_reviews": tv_review_count,
+                "avg_rating": overall_avg,
+                "movie_avg_rating": movie_avg_rating,
+                "tv_avg_rating": tv_avg_rating,
+            },
+            "favorites": favorites,
+            "recent_reviews": reviews,
+            "watchlist": {
+                "movies": movie_watchlist,
+                "tv": tv_watchlist,
+            },
+        })
+    except Exception as exc:
+        import traceback
+        print(f"Error in get_public_user_profile: {traceback.format_exc()}")
         return jsonify({"ok": False, "error": f"Server error: {str(exc)}"}), 500
 
 
@@ -815,12 +1241,14 @@ def signup():
 
     hashed = generate_password_hash(password)
     try:
+        # Use username as display_name if provided, otherwise derive from email
+        display_name = username if username else None
         conn.execute(
             """
-            INSERT INTO users (email, password_hash, password_plain)
-            VALUES (?, ?, ?)
+            INSERT INTO users (email, password_hash, password_plain, display_name)
+            VALUES (?, ?, ?, ?)
             """,
-            (email, hashed, password),
+            (email, hashed, password, display_name),
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -836,6 +1264,15 @@ def signup():
 
 @app.post("/api/login")
 def login_route():
+    # Force fresh connection BEFORE bootstrap to ensure we're reading latest data
+    from flask import g as flask_g
+    if "sqlite_conn" in flask_g:
+        try:
+            flask_g.sqlite_conn.close()
+        except:
+            pass
+        del flask_g.sqlite_conn
+    
     _ensure_auth_bootstrap()
     payload = request.get_json(silent=True) or {}
     email = (payload.get("email") or "").strip()
@@ -844,7 +1281,15 @@ def login_route():
     if not email or not password:
         return jsonify({"ok": False, "error": "Missing email or password"}), 400
 
-    rows = query(
+    # Use the same connection that _ensure_auth_bootstrap() created
+    conn = get_db()
+    # Force checkpoint if in WAL mode to ensure we see latest commits
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except:
+        pass
+    
+    login_cursor = conn.execute(
         """
         SELECT user_id, email, password_hash, password_plain, is_admin
         FROM users
@@ -853,6 +1298,7 @@ def login_route():
         """,
         (email,),
     )
+    rows = login_cursor.fetchall()
     if not rows:
         return jsonify({"ok": False, "error": "Invalid credentials"}), 401
 
@@ -860,15 +1306,27 @@ def login_route():
     stored_hash = record.get("password_hash")
     stored_plain = record.get("password_plain")
 
+    print(f"[DEBUG LOGIN] Attempting login for email: {email}")
+    print(f"[DEBUG LOGIN] User ID: {record.get('user_id')}")
+    print(f"[DEBUG LOGIN] Has stored_hash: {bool(stored_hash)}")
+    print(f"[DEBUG LOGIN] Has stored_plain: {bool(stored_plain)}")
+    print(f"[DEBUG LOGIN] Password provided length: {len(password)}")
+    print(f"[DEBUG LOGIN] Stored password_plain value: '{stored_plain}'")
+
     verified = False
     if stored_hash:
         try:
             verified = check_password_hash(stored_hash, password)
-        except ValueError:
+            print(f"[DEBUG LOGIN] Hash verification result: {verified}")
+        except ValueError as e:
+            print(f"[DEBUG LOGIN] Hash verification exception: {e}")
             verified = False
     if not verified and stored_plain is not None:
-        verified = stored_plain == password
+        plain_match = stored_plain == password
+        print(f"[DEBUG LOGIN] Plain password check: stored='{stored_plain}', provided='{password}', match={plain_match}")
+        verified = plain_match
 
+    print(f"[DEBUG LOGIN] Final verification result: {verified}")
     if not verified:
         return jsonify({"ok": False, "error": "Invalid credentials"}), 401
 
@@ -928,6 +1386,10 @@ def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | 
     """
     total = query(total_sql, tuple(params_count))[0]["cnt"]
 
+    # Determine review table join based on media type
+    review_table = "reviews"
+    review_id_col = "movie_id" if media_type == "movie" else "show_id"
+    
     rows = query(
         f"""
         SELECT DISTINCT t.{id_col} AS record_id,
@@ -938,7 +1400,13 @@ def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | 
                t.tmdb_vote_avg,
                t.popularity,
                t.{release_col} AS release_value,
-               t.original_language
+               t.original_language,
+               (
+                   SELECT AVG(rating) FROM {review_table} WHERE {review_id_col} = t.{id_col}
+               ) AS user_avg_rating,
+               (
+                   SELECT COUNT(*) FROM {review_table} WHERE {review_id_col} = t.{id_col}
+               ) AS review_count
         FROM {table} t
         INNER JOIN {genre_table} gt ON t.{id_col} = gt.{id_col}
         INNER JOIN genres g ON g.genre_id = gt.genre_id
@@ -955,6 +1423,18 @@ def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | 
         release_value = data.get("release_value")
         if media_type == "movie" and release_value is not None:
             release_value = str(release_value)
+        
+        # Calculate consolidated rating
+        tmdb_rating = data.get("tmdb_vote_avg")
+        user_rating = float(data["user_avg_rating"]) if data.get("user_avg_rating") is not None else None
+        review_count = data.get("review_count") or 0
+        consolidated = calculate_consolidated_rating(
+            tmdb_rating=tmdb_rating,
+            user_rating=user_rating,
+            user_count=review_count,
+            confidence=5.0
+        )
+        
         result = {
             "media_type": media_type,
             "id": data["record_id"],
@@ -963,12 +1443,17 @@ def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | 
             "overview": data.get("overview") or "",
             "poster_path": data.get("poster_path"),
             "backdrop_path": None,
-            "vote_average": data.get("tmdb_vote_avg"),
+            "vote_average": tmdb_rating,
+            "consolidated_rating": round(consolidated, 2) if consolidated is not None else None,
             "popularity": data.get("popularity"),
             "release_date": release_value,
             "original_language": data.get("original_language"),
             "genres": [],
         }
+        if user_rating is not None:
+            result["user_avg_rating"] = round(user_rating, 2)
+        if review_count > 0:
+            result["review_count"] = review_count
         results.append(result)
 
     return {"total": total, "page": page, "results": results}
@@ -1079,6 +1564,438 @@ def refresh_kpis():
             "ok": False,
             "error": f"KPI refresh failed: {str(e)}"
         }), 500
+
+
+# ============================================================================
+# Analytics Endpoints
+# ============================================================================
+
+@app.get("/api/analytics/top-movies")
+def analytics_top_movies():
+    """
+    Get top rated movies by consolidated rating (Q5).
+    Uses consolidated rating (combines TMDb + user ratings).
+    Query param: limit (default 5, max 50)
+    """
+    limit = _get_int(request.args.get("limit"), 5, 1, 50)
+    
+    rows = query(
+        """
+        SELECT 
+            m.movie_id,
+            m.tmdb_id,
+            m.title,
+            m.overview,
+            m.poster_path,
+            m.tmdb_vote_avg,
+            m.popularity,
+            m.release_year,
+            m.original_language,
+            COALESCE(AVG(r.rating), 0) AS user_avg_rating,
+            COUNT(r.review_id) AS review_count,
+            CASE 
+                WHEN COUNT(r.review_id) = 0 THEN m.tmdb_vote_avg
+                ELSE (5.0 * COALESCE(m.tmdb_vote_avg, 5.0) + 
+                      AVG(r.rating) * COUNT(r.review_id)) / 
+                     (5.0 + COUNT(r.review_id))
+            END AS consolidated_rating
+        FROM movies m
+        LEFT JOIN reviews r ON r.movie_id = m.movie_id
+        WHERE m.tmdb_vote_avg IS NOT NULL AND m.tmdb_vote_avg > 0
+        GROUP BY m.movie_id
+        HAVING consolidated_rating IS NOT NULL AND consolidated_rating > 0
+        ORDER BY consolidated_rating DESC, m.popularity DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    
+    results = []
+    for row in rows:
+        data = dict(row)
+        tmdb_rating = data.get("tmdb_vote_avg")
+        user_rating = float(data["user_avg_rating"]) if data.get("user_avg_rating") is not None and data["user_avg_rating"] > 0 else None
+        review_count = data.get("review_count") or 0
+        consolidated = calculate_consolidated_rating(
+            tmdb_rating=tmdb_rating,
+            user_rating=user_rating,
+            user_count=review_count,
+            confidence=5.0
+        )
+        
+        # Get genres
+        genre_rows = query(
+            """
+            SELECT g.name
+            FROM movie_genres mg
+            JOIN genres g ON g.genre_id = mg.genre_id
+            WHERE mg.movie_id = ?
+            ORDER BY g.name
+            """,
+            (data["movie_id"],),
+        )
+        
+        result = {
+            "media_type": "movie",
+            "id": data["movie_id"],
+            "tmdb_id": data["tmdb_id"],
+            "title": data["title"],
+            "overview": data.get("overview") or "",
+            "poster_path": data.get("poster_path"),
+            "backdrop_path": None,
+            "vote_average": tmdb_rating,
+            "consolidated_rating": round(consolidated, 2) if consolidated is not None else None,
+            "popularity": data.get("popularity"),
+            "release_date": str(data["release_year"]) if data.get("release_year") else None,
+            "original_language": data.get("original_language"),
+            "genres": [g["name"] for g in genre_rows],
+        }
+        if user_rating is not None:
+            result["user_avg_rating"] = round(user_rating, 2)
+        if review_count > 0:
+            result["review_count"] = review_count
+        results.append(result)
+    
+    return jsonify({"results": results})
+
+
+@app.get("/api/analytics/top-shows")
+def analytics_top_shows():
+    """
+    Get top rated shows by consolidated rating (Q6).
+    Uses consolidated rating (combines TMDb + user ratings).
+    Query param: limit (default 5, max 50)
+    """
+    limit = _get_int(request.args.get("limit"), 5, 1, 50)
+    
+    rows = query(
+        """
+        SELECT 
+            s.show_id,
+            s.tmdb_id,
+            s.title,
+            s.overview,
+            s.poster_path,
+            s.tmdb_vote_avg,
+            s.popularity,
+            s.first_air_date,
+            s.original_language,
+            COALESCE(AVG(r.rating), 0) AS user_avg_rating,
+            COUNT(r.review_id) AS review_count,
+            CASE 
+                WHEN COUNT(r.review_id) = 0 THEN s.tmdb_vote_avg
+                ELSE (5.0 * COALESCE(s.tmdb_vote_avg, 5.0) + 
+                      AVG(r.rating) * COUNT(r.review_id)) / 
+                     (5.0 + COUNT(r.review_id))
+            END AS consolidated_rating
+        FROM shows s
+        LEFT JOIN reviews r ON r.show_id = s.show_id
+        WHERE s.tmdb_vote_avg IS NOT NULL AND s.tmdb_vote_avg > 0
+        GROUP BY s.show_id
+        HAVING consolidated_rating IS NOT NULL AND consolidated_rating > 0
+        ORDER BY consolidated_rating DESC, s.popularity DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    
+    results = []
+    for row in rows:
+        data = dict(row)
+        tmdb_rating = data.get("tmdb_vote_avg")
+        user_rating = float(data["user_avg_rating"]) if data.get("user_avg_rating") is not None and data["user_avg_rating"] > 0 else None
+        review_count = data.get("review_count") or 0
+        consolidated = calculate_consolidated_rating(
+            tmdb_rating=tmdb_rating,
+            user_rating=user_rating,
+            user_count=review_count,
+            confidence=5.0
+        )
+        
+        # Get genres
+        genre_rows = query(
+            """
+            SELECT g.name
+            FROM show_genres sg
+            JOIN genres g ON g.genre_id = sg.genre_id
+            WHERE sg.show_id = ?
+            ORDER BY g.name
+            """,
+            (data["show_id"],),
+        )
+        
+        result = {
+            "media_type": "tv",
+            "id": data["show_id"],
+            "tmdb_id": data["tmdb_id"],
+            "title": data["title"],
+            "overview": data.get("overview") or "",
+            "poster_path": data.get("poster_path"),
+            "backdrop_path": None,
+            "vote_average": tmdb_rating,
+            "consolidated_rating": round(consolidated, 2) if consolidated is not None else None,
+            "popularity": data.get("popularity"),
+            "release_date": data.get("first_air_date"),
+            "original_language": data.get("original_language"),
+            "genres": [g["name"] for g in genre_rows],
+        }
+        if user_rating is not None:
+            result["user_avg_rating"] = round(user_rating, 2)
+        if review_count > 0:
+            result["review_count"] = review_count
+        results.append(result)
+    
+    return jsonify({"results": results})
+
+
+@app.get("/api/analytics/genre-distribution")
+def analytics_genre_distribution():
+    """
+    Get genre distribution for movies or shows (Q7, Q8).
+    Query param: type ('movie' or 'show', default 'movie')
+    """
+    media_type = (request.args.get("type") or "movie").lower()
+    if media_type not in {"movie", "show"}:
+        return jsonify({"error": "type must be 'movie' or 'show'"}), 400
+    
+    if media_type == "movie":
+        rows = query(
+            """
+            SELECT g.name,
+                   COUNT(mg.movie_id) AS count
+            FROM genres g
+            LEFT JOIN movie_genres mg ON mg.genre_id = g.genre_id
+            GROUP BY g.genre_id
+            ORDER BY count DESC, g.name
+            """
+        )
+    else:
+        rows = query(
+            """
+            SELECT g.name,
+                   COUNT(sg.show_id) AS count
+            FROM genres g
+            LEFT JOIN show_genres sg ON sg.genre_id = g.genre_id
+            GROUP BY g.genre_id
+            ORDER BY count DESC, g.name
+            """
+        )
+    
+    results = [
+        {"name": row["name"], "count": row["count"]}
+        for row in rows
+    ]
+    
+    return jsonify({"results": results})
+
+
+@app.get("/api/analytics/popular-watchlists")
+def analytics_popular_watchlists():
+    """
+    Get most watchlisted titles (Q29).
+    Query param: limit (default 10, max 50)
+    """
+    limit = _get_int(request.args.get("limit"), 10, 1, 50)
+    
+    rows = query(
+        """
+        SELECT target_type, target_id, target_title, poster_path, watchlist_count
+        FROM (
+            SELECT 'movie' AS target_type,
+                   m.movie_id AS target_id,
+                   m.title AS target_title,
+                   m.poster_path,
+                   COUNT(*) AS watchlist_count
+            FROM watchlists w
+            JOIN movies m ON m.movie_id = w.movie_id
+            WHERE w.movie_id IS NOT NULL
+            GROUP BY m.movie_id
+            UNION ALL
+            SELECT 'show' AS target_type,
+                   s.show_id AS target_id,
+                   s.title AS target_title,
+                   s.poster_path,
+                   COUNT(*) AS watchlist_count
+            FROM watchlists w
+            JOIN shows s ON s.show_id = w.show_id
+            WHERE w.show_id IS NOT NULL
+            GROUP BY s.show_id
+        ) AS listing
+        ORDER BY watchlist_count DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    
+    results = [
+        {
+            "media_type": row["target_type"],
+            "id": row["target_id"],
+            "title": row["target_title"],
+            "poster_path": row["poster_path"],
+            "watchlist_count": row["watchlist_count"]
+        }
+        for row in rows
+    ]
+    
+    return jsonify({"results": results})
+
+
+@app.get("/api/analytics/unreviewed")
+def analytics_unreviewed():
+    """
+    Get titles with no user reviews yet (Q9).
+    Query param: type ('all', 'movie', or 'show', default 'all')
+    Query param: limit (default 20, max 100)
+    """
+    media_type = (request.args.get("type") or "all").lower()
+    limit = _get_int(request.args.get("limit"), 20, 1, 100)
+    
+    if media_type not in {"all", "movie", "show"}:
+        return jsonify({"error": "type must be 'all', 'movie', or 'show'"}), 400
+    
+    results = []
+    
+    if media_type in {"all", "movie"}:
+        movie_rows = query(
+            """
+            SELECT m.movie_id, m.title, m.poster_path, m.tmdb_vote_avg, m.release_year
+            FROM movies m
+            LEFT JOIN reviews r ON r.movie_id = m.movie_id
+            WHERE r.review_id IS NULL
+            ORDER BY m.popularity DESC
+            LIMIT ?
+            """,
+            (limit if media_type == "movie" else limit // 2,),
+        )
+        for row in movie_rows:
+            results.append({
+                "media_type": "movie",
+                "id": row["movie_id"],
+                "title": row["title"],
+                "poster_path": row["poster_path"],
+                "vote_average": row["tmdb_vote_avg"],
+                "release_date": str(row["release_year"]) if row["release_year"] else None
+            })
+    
+    if media_type in {"all", "show"}:
+        show_rows = query(
+            """
+            SELECT s.show_id, s.title, s.poster_path, s.tmdb_vote_avg, s.first_air_date
+            FROM shows s
+            LEFT JOIN reviews r ON r.show_id = s.show_id
+            WHERE r.review_id IS NULL
+            ORDER BY s.popularity DESC
+            LIMIT ?
+            """,
+            (limit if media_type == "show" else limit // 2,),
+        )
+        for row in show_rows:
+            results.append({
+                "media_type": "tv",
+                "id": row["show_id"],
+                "title": row["title"],
+                "poster_path": row["poster_path"],
+                "vote_average": row["tmdb_vote_avg"],
+                "release_date": row["first_air_date"]
+            })
+    
+    return jsonify({"results": results})
+
+
+@app.get("/api/analytics/active-reviewers")
+def analytics_active_reviewers():
+    """
+    Get users who reviewed the most titles (Q28).
+    Query param: min_reviews (default 3, min 1)
+    Query param: limit (default 10, max 50)
+    """
+    min_reviews = _get_int(request.args.get("min_reviews"), 3, 1, 100)
+    limit = _get_int(request.args.get("limit"), 10, 1, 50)
+    
+    rows = query(
+        """
+        SELECT u.user_id, u.email, u.display_name,
+               COUNT(r.review_id) AS review_count,
+               AVG(r.rating) AS avg_rating
+        FROM users u
+        JOIN reviews r ON r.user_id = u.user_id
+        GROUP BY u.user_id
+        HAVING COUNT(r.review_id) >= ?
+        ORDER BY review_count DESC, avg_rating DESC
+        LIMIT ?
+        """,
+        (min_reviews, limit),
+    )
+    
+    results = [
+        {
+            "user_id": row["user_id"],
+            "display_name": row["display_name"] or row["email"].split("@")[0],
+            "review_count": row["review_count"],
+            "avg_rating": round(row["avg_rating"], 1) if row["avg_rating"] else None
+        }
+        for row in rows
+    ]
+    
+    return jsonify({"results": results})
+
+
+@app.get("/api/analytics/genre-ratings")
+def analytics_genre_ratings():
+    """
+    Get average user rating per genre (Q27).
+    Query param: type ('movie' or 'show', default 'movie')
+    Admin only endpoint.
+    """
+    _ensure_auth_bootstrap()
+    _require_admin()
+    
+    media_type = (request.args.get("type") or "movie").lower()
+    if media_type not in {"movie", "show"}:
+        return jsonify({"error": "type must be 'movie' or 'show'"}), 400
+    
+    if media_type == "movie":
+        rows = query(
+            """
+            SELECT g.name,
+                   AVG(r.rating) AS avg_rating,
+                   COUNT(r.review_id) AS review_count
+            FROM genres g
+            JOIN movie_genres mg ON mg.genre_id = g.genre_id
+            JOIN reviews r ON r.movie_id = mg.movie_id
+            WHERE r.rating IS NOT NULL
+            GROUP BY g.genre_id
+            HAVING COUNT(r.review_id) > 0
+            ORDER BY avg_rating DESC
+            """
+        )
+    else:
+        rows = query(
+            """
+            SELECT g.name,
+                   AVG(r.rating) AS avg_rating,
+                   COUNT(r.review_id) AS review_count
+            FROM genres g
+            JOIN show_genres sg ON sg.genre_id = g.genre_id
+            JOIN reviews r ON r.show_id = sg.show_id
+            WHERE r.rating IS NOT NULL
+            GROUP BY g.genre_id
+            HAVING COUNT(r.review_id) > 0
+            ORDER BY avg_rating DESC
+            """
+        )
+    
+    results = [
+        {
+            "name": row["name"],
+            "avg_rating": round(row["avg_rating"], 2) if row["avg_rating"] else None,
+            "review_count": row["review_count"]
+        }
+        for row in rows
+    ]
+    
+    return jsonify({"results": results})
 
 
 @app.get("/api/genres")
@@ -1325,20 +2242,36 @@ def trending():
         backdrop_url = _tmdb_image(data.get("backdrop_path"), "w780") or poster_url
         if not poster_url and not backdrop_url:
             continue
-        results.append(
-            {
-                "media_type": data["media_type"],
-                "item_id": data["item_id"],
-                "tmdb_id": data["tmdb_id"],
-                "title": data["title"],
-                "overview": data.get("overview") or "",
-                "poster_url": poster_url,
-                "backdrop_url": backdrop_url,
-                "tmdb_vote_avg": data.get("score"),
-                "release_date": data.get("release_date"),
-                "genres": genres,
-            }
+        
+        # Calculate consolidated rating
+        tmdb_rating = data.get("score")
+        user_rating = float(data["user_avg_rating"]) if data.get("user_avg_rating") is not None else None
+        review_count = data.get("review_count") or 0
+        consolidated = calculate_consolidated_rating(
+            tmdb_rating=tmdb_rating,
+            user_rating=user_rating,
+            user_count=review_count,
+            confidence=5.0
         )
+        
+        result = {
+            "media_type": data["media_type"],
+            "item_id": data["item_id"],
+            "tmdb_id": data["tmdb_id"],
+            "title": data["title"],
+            "overview": data.get("overview") or "",
+            "poster_url": poster_url,
+            "backdrop_url": backdrop_url,
+            "tmdb_vote_avg": tmdb_rating,
+            "consolidated_rating": round(consolidated, 2) if consolidated is not None else None,
+            "release_date": data.get("release_date"),
+            "genres": genres,
+        }
+        if user_rating is not None:
+            result["user_avg_rating"] = round(user_rating, 2)
+        if review_count > 0:
+            result["review_count"] = review_count
+        results.append(result)
     if period == "all":
         movies: list[dict[str, Any]] = [item for item in results if item["media_type"] == "movie"]
         shows: list[dict[str, Any]] = [item for item in results if item["media_type"] != "movie"]
@@ -1376,7 +2309,13 @@ def new_releases():
                    m.popularity,
                    m.release_year AS release_sort,
                    CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
-                   GROUP_CONCAT(DISTINCT g.name) AS genres
+                   GROUP_CONCAT(DISTINCT g.name) AS genres,
+                   (
+                       SELECT AVG(rating) FROM reviews WHERE movie_id = m.movie_id
+                   ) AS user_avg_rating,
+                   (
+                       SELECT COUNT(*) FROM reviews WHERE movie_id = m.movie_id
+                   ) AS review_count
             FROM movies m
             INNER JOIN movie_genres mg ON mg.movie_id = m.movie_id
             INNER JOIN genres g ON g.genre_id = mg.genre_id
@@ -1401,7 +2340,13 @@ def new_releases():
                        ELSE NULL
                    END AS release_sort,
                    s.first_air_date AS release_date,
-                   GROUP_CONCAT(DISTINCT g.name) AS genres
+                   GROUP_CONCAT(DISTINCT g.name) AS genres,
+                   (
+                       SELECT AVG(rating) FROM reviews WHERE show_id = s.show_id
+                   ) AS user_avg_rating,
+                   (
+                       SELECT COUNT(*) FROM reviews WHERE show_id = s.show_id
+                   ) AS review_count
             FROM shows s
             INNER JOIN show_genres sg ON sg.show_id = s.show_id
             INNER JOIN genres g ON g.genre_id = sg.genre_id
@@ -1426,7 +2371,13 @@ def new_releases():
                        m.popularity,
                        m.release_year AS release_sort,
                        CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
-                       GROUP_CONCAT(DISTINCT g.name) AS genres
+                       GROUP_CONCAT(DISTINCT g.name) AS genres,
+                       (
+                           SELECT AVG(rating) FROM reviews WHERE movie_id = m.movie_id
+                       ) AS user_avg_rating,
+                       (
+                           SELECT COUNT(*) FROM reviews WHERE movie_id = m.movie_id
+                       ) AS review_count
                 FROM movies m
                 INNER JOIN movie_genres mg ON mg.movie_id = m.movie_id
                 INNER JOIN genres g ON g.genre_id = mg.genre_id
@@ -1446,7 +2397,13 @@ def new_releases():
                            ELSE NULL
                        END AS release_sort,
                        s.first_air_date AS release_date,
-                       GROUP_CONCAT(DISTINCT g.name) AS genres
+                       GROUP_CONCAT(DISTINCT g.name) AS genres,
+                       (
+                           SELECT AVG(rating) FROM reviews WHERE show_id = s.show_id
+                       ) AS user_avg_rating,
+                       (
+                           SELECT COUNT(*) FROM reviews WHERE show_id = s.show_id
+                       ) AS review_count
                 FROM shows s
                 INNER JOIN show_genres sg ON sg.show_id = s.show_id
                 INNER JOIN genres g ON g.genre_id = sg.genre_id
@@ -1463,20 +2420,38 @@ def new_releases():
     for row in rows:
         data = dict(row)
         genres = [g.strip() for g in (data.get("genres") or "").split(",") if g.strip()]
-        results.append(
-            {
-                "media_type": data["media_type"],
-                "item_id": data["item_id"],
-                "tmdb_id": data["tmdb_id"],
-                "title": data["title"],
-                "overview": data.get("overview") or "",
-                "poster_path": data.get("poster_path"),
-                "vote_average": data.get("score"),
-                "popularity": data.get("popularity"),
-                "release_date": data.get("release_date"),
-                "genres": genres,
-            }
+        
+        # Calculate consolidated rating
+        tmdb_rating = data.get("score")
+        user_rating = float(data["user_avg_rating"]) if data.get("user_avg_rating") is not None else None
+        review_count = data.get("review_count") or 0
+        consolidated = calculate_consolidated_rating(
+            tmdb_rating=tmdb_rating,
+            user_rating=user_rating,
+            user_count=review_count,
+            confidence=5.0
         )
+        
+        result = {
+            "media_type": data["media_type"],
+            "id": data["item_id"],
+            "tmdb_id": data["tmdb_id"],
+            "title": data["title"],
+            "overview": data.get("overview") or "",
+            "poster_path": data.get("poster_path"),
+            "backdrop_path": None,
+            "vote_average": tmdb_rating,
+            "consolidated_rating": round(consolidated, 2) if consolidated is not None else None,
+            "popularity": data.get("popularity"),
+            "release_date": data.get("release_date"),
+            "genres": genres,
+            "original_language": None,
+        }
+        if user_rating is not None:
+            result["user_avg_rating"] = round(user_rating, 2)
+        if review_count > 0:
+            result["review_count"] = review_count
+        results.append(result)
     return jsonify({"results": results})
 
 
@@ -1501,7 +2476,13 @@ def search_catalog():
                m.tmdb_vote_avg AS vote_average,
                m.popularity,
                CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
-               GROUP_CONCAT(DISTINCT g.name) AS genres
+               GROUP_CONCAT(DISTINCT g.name) AS genres,
+               (
+                   SELECT AVG(rating) FROM reviews WHERE movie_id = m.movie_id
+               ) AS user_avg_rating,
+               (
+                   SELECT COUNT(*) FROM reviews WHERE movie_id = m.movie_id
+               ) AS review_count
         FROM movies m
         INNER JOIN movie_genres mg ON mg.movie_id = m.movie_id
         INNER JOIN genres g ON g.genre_id = mg.genre_id
@@ -1523,7 +2504,13 @@ def search_catalog():
                s.tmdb_vote_avg AS vote_average,
                s.popularity,
                s.first_air_date AS release_date,
-               GROUP_CONCAT(DISTINCT g.name) AS genres
+               GROUP_CONCAT(DISTINCT g.name) AS genres,
+               (
+                   SELECT AVG(rating) FROM reviews WHERE show_id = s.show_id
+               ) AS user_avg_rating,
+               (
+                   SELECT COUNT(*) FROM reviews WHERE show_id = s.show_id
+               ) AS review_count
         FROM shows s
         INNER JOIN show_genres sg ON sg.show_id = s.show_id
         INNER JOIN genres g ON g.genre_id = sg.genre_id
@@ -1545,22 +2532,38 @@ def search_catalog():
     for row in all_rows[:50]:  # Limit to 50 results
         data = dict(row)
         genres = [g.strip() for g in (data.get("genres") or "").split(",") if g.strip()]
-        results.append(
-            {
-                "media_type": data["media_type"],
-                "id": data["item_id"],
-                "tmdb_id": data["tmdb_id"],
-                "title": data["title"],
-                "overview": data.get("overview") or "",
-                "poster_path": data.get("poster_path"),
-                "backdrop_path": None,
-                "vote_average": data.get("vote_average"),
-                "popularity": data.get("popularity"),
-                "release_date": data.get("release_date"),
-                "genres": genres,
-                "original_language": None,
-            }
+        
+        # Calculate consolidated rating
+        tmdb_rating = data.get("vote_average")
+        user_rating = float(data["user_avg_rating"]) if data.get("user_avg_rating") is not None else None
+        review_count = data.get("review_count") or 0
+        consolidated = calculate_consolidated_rating(
+            tmdb_rating=tmdb_rating,
+            user_rating=user_rating,
+            user_count=review_count,
+            confidence=5.0
         )
+        
+        result = {
+            "media_type": data["media_type"],
+            "id": data["item_id"],
+            "tmdb_id": data["tmdb_id"],
+            "title": data["title"],
+            "overview": data.get("overview") or "",
+            "poster_path": data.get("poster_path"),
+            "backdrop_path": None,
+            "vote_average": tmdb_rating,
+            "consolidated_rating": round(consolidated, 2) if consolidated is not None else None,
+            "popularity": data.get("popularity"),
+            "release_date": data.get("release_date"),
+            "genres": genres,
+            "original_language": None,
+        }
+        if user_rating is not None:
+            result["user_avg_rating"] = round(user_rating, 2)
+        if review_count > 0:
+            result["review_count"] = review_count
+        results.append(result)
     
     return jsonify({"page": page, "results": results, "total_results": len(results)})
 
@@ -1587,8 +2590,22 @@ def movie_detail(movie_id: int):
     movie = dict(row[0])
     movie["vote_average"] = movie.get("tmdb_vote_avg")
     movie["runtime_minutes"] = movie.get("runtime_min")
+    user_avg_rating = None
+    review_count = movie.get("review_count") or 0
     if movie.get("user_vote_avg") is not None:
-        movie["user_avg_rating"] = float(movie["user_vote_avg"])
+        user_avg_rating = float(movie["user_vote_avg"])
+        movie["user_avg_rating"] = user_avg_rating
+    
+    # Calculate consolidated rating
+    consolidated = calculate_consolidated_rating(
+        tmdb_rating=movie.get("tmdb_vote_avg"),
+        user_rating=user_avg_rating,
+        user_count=review_count,
+        confidence=5.0
+    )
+    if consolidated is not None:
+        movie["consolidated_rating"] = round(consolidated, 2)
+    
     genres = query(
         """
         SELECT g.name
@@ -1601,7 +2618,7 @@ def movie_detail(movie_id: int):
     )
     cast = query(
         """
-        SELECT p.name, mc.character, mc.cast_order
+        SELECT p.person_id, p.name, p.profile_path, mc.character, mc.cast_order
         FROM movie_cast mc
         JOIN people p ON p.person_id = mc.person_id
         WHERE mc.movie_id = ?
@@ -1611,7 +2628,13 @@ def movie_detail(movie_id: int):
         (movie_id,),
     )
     movie["genres"] = [g["name"] for g in genres]
-    movie["top_cast"] = _dicts(cast)
+    movie["top_cast"] = [
+        {
+            **dict(c),
+            "profile_url": _tmdb_image(c["profile_path"], "w185")
+        }
+        for c in cast
+    ]
     return jsonify(movie)
 
 
@@ -1639,8 +2662,22 @@ def show_detail(show_id: int):
 
     show = dict(row[0])
     show["vote_average"] = show.get("tmdb_vote_avg")
+    user_avg_rating = None
+    review_count = show.get("review_count") or 0
     if show.get("user_vote_avg") is not None:
-        show["user_avg_rating"] = float(show["user_vote_avg"])
+        user_avg_rating = float(show["user_vote_avg"])
+        show["user_avg_rating"] = user_avg_rating
+    
+    # Calculate consolidated rating
+    consolidated = calculate_consolidated_rating(
+        tmdb_rating=show.get("tmdb_vote_avg"),
+        user_rating=user_avg_rating,
+        user_count=review_count,
+        confidence=5.0
+    )
+    if consolidated is not None:
+        show["consolidated_rating"] = round(consolidated, 2)
+    
     genres = query(
         """
         SELECT g.name
@@ -1653,7 +2690,7 @@ def show_detail(show_id: int):
     )
     cast = query(
         """
-        SELECT p.name, sc.character, sc.cast_order
+        SELECT p.person_id, p.name, p.profile_path, sc.character, sc.cast_order
         FROM show_cast sc
         JOIN people p ON p.person_id = sc.person_id
         WHERE sc.show_id = ?
@@ -1663,8 +2700,96 @@ def show_detail(show_id: int):
         (show_id,),
     )
     show["genres"] = [g["name"] for g in genres]
-    show["top_cast"] = _dicts(cast)
+    show["top_cast"] = [
+        {
+            **dict(c),
+            "profile_url": _tmdb_image(c["profile_path"], "w185")
+        }
+        for c in cast
+    ]
     return jsonify(show)
+
+
+@app.get("/api/people/<int:person_id>")
+def person_detail(person_id: int):
+    """
+    Get detailed information about a person (actor/actress).
+    Returns person details including biography, birthday, social media links, etc.
+    """
+    row = query(
+        """
+        SELECT p.*
+        FROM people p
+        WHERE p.person_id = ?
+        """,
+        (person_id,),
+    )
+    
+    if not row:
+        return jsonify({"error": "Person not found"}), 404
+    
+    person = dict(row[0])
+    
+    # Add profile image URL
+    if person.get("profile_path"):
+        person["profile_image_url"] = _tmdb_image(person["profile_path"], "w185")
+        person["profile_image_large_url"] = _tmdb_image(person["profile_path"], "h632")
+    else:
+        person["profile_image_url"] = None
+        person["profile_image_large_url"] = None
+    
+    # Add social media URLs
+    person["social_links"] = {}
+    if person.get("imdb_id"):
+        person["social_links"]["imdb"] = f"https://www.imdb.com/name/{person['imdb_id']}"
+    if person.get("instagram_id"):
+        person["social_links"]["instagram"] = f"https://www.instagram.com/{person['instagram_id']}"
+    if person.get("twitter_id"):
+        person["social_links"]["twitter"] = f"https://twitter.com/{person['twitter_id']}"
+    if person.get("facebook_id"):
+        person["social_links"]["facebook"] = f"https://www.facebook.com/{person['facebook_id']}"
+    
+    # Get movies this person has appeared in
+    movies = query(
+        """
+        SELECT m.movie_id, m.title, m.release_year, m.poster_path, mc.character, mc.cast_order
+        FROM movie_cast mc
+        JOIN movies m ON m.movie_id = mc.movie_id
+        WHERE mc.person_id = ?
+        ORDER BY m.release_year DESC, mc.cast_order ASC
+        LIMIT 20
+        """,
+        (person_id,),
+    )
+    person["movies"] = [
+        {
+            **dict(movie),
+            "poster_url": _tmdb_image(movie["poster_path"], "w185")
+        }
+        for movie in movies
+    ]
+    
+    # Get TV shows this person has appeared in
+    shows = query(
+        """
+        SELECT s.show_id, s.title, s.first_air_date, s.poster_path, sc.character, sc.cast_order
+        FROM show_cast sc
+        JOIN shows s ON s.show_id = sc.show_id
+        WHERE sc.person_id = ?
+        ORDER BY s.first_air_date DESC, sc.cast_order ASC
+        LIMIT 20
+        """,
+        (person_id,),
+    )
+    person["shows"] = [
+        {
+            **dict(show),
+            "poster_url": _tmdb_image(show["poster_path"], "w185")
+        }
+        for show in shows
+    ]
+    
+    return jsonify(person)
 
 
 @app.delete("/api/movies/<int:movie_id>")
@@ -2085,6 +3210,7 @@ def get_reviews():
     - target_type: 'movie' or 'show'
     - target_id: the movie_id or show_id
     """
+    _ensure_review_reactions_table()  # Ensure table exists
     target_type = request.args.get("target_type")
     target_id = request.args.get("target_id")
     
@@ -2122,13 +3248,29 @@ def get_reviews():
     rows = query(sql, (target_id_int,))
     reviews = []
     for row in rows:
+        review_id = row["review_id"]
+        # Get reaction counts for this review
+        reaction_rows = query(
+            """
+            SELECT emote_type, COUNT(*) AS count
+            FROM review_reactions
+            WHERE review_id = ?
+            GROUP BY emote_type
+            """,
+            (review_id,)
+        )
+        reactions = {}
+        for r_row in reaction_rows:
+            reactions[r_row["emote_type"]] = r_row["count"]
+        
         reviews.append({
-            "review_id": row["review_id"],
+            "review_id": review_id,
             "user_id": row["user_id"],
             "user_email": row["user_email"],
             "content": row["content"],
             "rating": row["rating"],
             "created_at": row["created_at"],
+            "reactions": reactions,
         })
     
     return jsonify({"ok": True, "reviews": reviews, "count": len(reviews)})
@@ -2162,6 +3304,22 @@ def create_review():
         return jsonify({"error": "Review content is required"}), 400
 
     conn = get_db()
+    
+    # Check if user already has a review for this movie/show
+    if target_type == "movie":
+        existing = conn.execute(
+            "SELECT review_id FROM reviews WHERE user_id = ? AND movie_id = ?",
+            (user_id, target_id)
+        ).fetchone()
+    else:
+        existing = conn.execute(
+            "SELECT review_id FROM reviews WHERE user_id = ? AND show_id = ?",
+            (user_id, target_id)
+        ).fetchone()
+    
+    if existing:
+        return jsonify({"error": "You can only review each title once. Please edit your existing review instead."}), 400
+    
     if target_type == "movie":
         sql = """
             INSERT INTO reviews (user_id, movie_id, rating, content)
@@ -2182,6 +3340,251 @@ def create_review():
         conn.rollback()
         return jsonify({"error": str(exc)}), 400
     return jsonify({"ok": True, "review_id": cur.lastrowid})
+
+
+@app.put("/api/reviews/<int:review_id>")
+def update_review(review_id: int):
+    """
+    Update an existing review (Q15).
+    Only the review owner can update their review, or admins can update any review.
+    Auth: Required (review owner or admin)
+    Body: { rating?: number, content?: string }
+    """
+    _ensure_auth_bootstrap()
+    user = _get_current_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    payload = request.get_json(force=True, silent=True) or {}
+    rating = payload.get("rating")
+    content = payload.get("content")
+    
+    # At least one field must be provided
+    if rating is None and content is None:
+        return jsonify({"ok": False, "error": "At least one of 'rating' or 'content' must be provided"}), 400
+    
+    # Validate rating if provided
+    rating_value = None
+    if rating is not None:
+        try:
+            rating_value = float(rating)
+            if not (0 <= rating_value <= 10):
+                return jsonify({"ok": False, "error": "rating must be between 0 and 10"}), 400
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "rating must be numeric"}), 400
+    
+    # Validate content if provided
+    if content is not None:
+        content = content.strip()
+        if not content:
+            return jsonify({"ok": False, "error": "content cannot be empty"}), 400
+    
+    conn = get_db()
+    try:
+        # First, verify the review exists and get its owner
+        check_row = conn.execute(
+            "SELECT user_id, movie_id, show_id FROM reviews WHERE review_id = ?",
+            (review_id,),
+        ).fetchone()
+        
+        if not check_row:
+            return jsonify({"ok": False, "error": "Review not found"}), 404
+        
+        review_owner_id = check_row["user_id"]
+        is_owner = review_owner_id == user["user_id"]
+        is_admin = user.get("is_admin", False)
+        
+        # Allow admins to update any review, regular users can only update their own
+        if not is_owner and not is_admin:
+            return jsonify({"ok": False, "error": "You can only update your own reviews"}), 403
+        
+        # Build UPDATE query dynamically based on what's provided
+        updates = []
+        params = []
+        
+        if rating_value is not None:
+            updates.append("rating = ?")
+            params.append(rating_value)
+        
+        if content is not None:
+            updates.append("content = ?")
+            params.append(content)
+        
+        params.append(review_id)
+        update_sql = f"UPDATE reviews SET {', '.join(updates)} WHERE review_id = ?"
+        
+        conn.execute(update_sql, tuple(params))
+        conn.commit()
+        
+        return jsonify({"ok": True, "message": "Review updated successfully"})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.delete("/api/reviews/<int:review_id>")
+def delete_review(review_id: int):
+    """
+    Delete an existing review (Q16).
+    Only the review owner can delete their review, or admins can delete any review.
+    Auth: Required (review owner or admin)
+    """
+    _ensure_auth_bootstrap()
+    user = _get_current_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    conn = get_db()
+    try:
+        # First, verify the review exists and get its owner
+        check_row = conn.execute(
+            "SELECT user_id FROM reviews WHERE review_id = ?",
+            (review_id,),
+        ).fetchone()
+        
+        if not check_row:
+            return jsonify({"ok": False, "error": "Review not found"}), 404
+        
+        review_owner_id = check_row["user_id"]
+        is_owner = review_owner_id == user["user_id"]
+        is_admin = user.get("is_admin", False)
+        
+        print(f"[DEBUG DELETE REVIEW] user_id={user['user_id']}, email={user.get('email')}, review_owner_id={review_owner_id}, is_owner={is_owner}, is_admin={is_admin}")
+        
+        # Allow admins to delete any review, regular users can only delete their own
+        if not is_owner and not is_admin:
+            print(f"[DEBUG DELETE REVIEW] Access denied: not owner ({is_owner}) and not admin ({is_admin})")
+            return jsonify({"ok": False, "error": "You can only delete your own reviews"}), 403
+        
+        print(f"[DEBUG DELETE REVIEW] Access granted: proceeding with delete")
+        
+        # Delete the review
+        deleted = conn.execute(
+            "DELETE FROM reviews WHERE review_id = ?",
+            (review_id,),
+        ).rowcount
+        
+        conn.commit()
+        
+        if deleted == 0:
+            return jsonify({"ok": False, "error": "Failed to delete review"}), 500
+        
+        return jsonify({"ok": True, "deleted": deleted, "message": "Review deleted successfully"})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.post("/api/reviews/<int:review_id>/reactions")
+def add_review_reaction(review_id: int):
+    """
+    Add or toggle a reaction to a review.
+    Auth: Required
+    Body: { emote_type: '👍' | '❤️' | '😂' | '😮' | '😢' | '🔥' }
+    """
+    _ensure_auth_bootstrap()
+    user = _get_current_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    payload = request.get_json(force=True, silent=True) or {}
+    emote_type = payload.get("emote_type")
+    
+    valid_emotes = ['👍', '❤️', '😂', '😮', '😢', '🔥']
+    if emote_type not in valid_emotes:
+        return jsonify({"ok": False, "error": f"emote_type must be one of: {', '.join(valid_emotes)}"}), 400
+    
+    conn = get_db()
+    try:
+        # Verify review exists
+        review_row = conn.execute(
+            "SELECT review_id FROM reviews WHERE review_id = ?",
+            (review_id,)
+        ).fetchone()
+        if not review_row:
+            return jsonify({"ok": False, "error": "Review not found"}), 404
+        
+        # Check if reaction already exists
+        existing = conn.execute(
+            "SELECT reaction_id FROM review_reactions WHERE review_id = ? AND user_id = ? AND emote_type = ?",
+            (review_id, user["user_id"], emote_type)
+        ).fetchone()
+        
+        if existing:
+            # Remove reaction (toggle off)
+            conn.execute(
+                "DELETE FROM review_reactions WHERE review_id = ? AND user_id = ? AND emote_type = ?",
+                (review_id, user["user_id"], emote_type)
+            )
+            conn.commit()
+            return jsonify({"ok": True, "action": "removed", "message": "Reaction removed"})
+        else:
+            # Add reaction
+            conn.execute(
+                "INSERT INTO review_reactions (review_id, user_id, emote_type) VALUES (?, ?, ?)",
+                (review_id, user["user_id"], emote_type)
+            )
+            conn.commit()
+            return jsonify({"ok": True, "action": "added", "message": "Reaction added"})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.get("/api/reviews/<int:review_id>/reactions")
+def get_review_reactions(review_id: int):
+    """
+    Get all reactions for a review, including whether current user has reacted.
+    Auth: Optional (if authenticated, shows user's reactions)
+    """
+    _ensure_review_reactions_table()  # Ensure table exists
+    _ensure_auth_bootstrap()
+    user = _get_current_user()
+    
+    conn = get_db()
+    try:
+        # Verify review exists
+        review_row = conn.execute(
+            "SELECT review_id FROM reviews WHERE review_id = ?",
+            (review_id,)
+        ).fetchone()
+        if not review_row:
+            return jsonify({"ok": False, "error": "Review not found"}), 404
+        
+        # Get all reaction counts
+        reaction_rows = query(
+            """
+            SELECT emote_type, COUNT(*) AS count
+            FROM review_reactions
+            WHERE review_id = ?
+            GROUP BY emote_type
+            """,
+            (review_id,)
+        )
+        reactions = {}
+        for row in reaction_rows:
+            reactions[row["emote_type"]] = row["count"]
+        
+        # Get current user's reactions if authenticated
+        user_reactions = []
+        if user:
+            user_reaction_rows = query(
+                """
+                SELECT emote_type
+                FROM review_reactions
+                WHERE review_id = ? AND user_id = ?
+                """,
+                (review_id, user["user_id"])
+            )
+            user_reactions = [row["emote_type"] for row in user_reaction_rows]
+        
+        return jsonify({
+            "ok": True,
+            "reactions": reactions,
+            "user_reactions": user_reactions
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.post("/api/watchlist")
@@ -2227,6 +3630,100 @@ def remove_watchlist():
 
     deleted = execute(sql, (user_id, target_id))
     return jsonify({"ok": True, "deleted": deleted})
+
+
+def _ensure_favorites_table() -> None:
+    """Ensure the favorites table exists (backward compatibility)."""
+    conn = get_db()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS favorites (
+                user_id     INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                movie_id    INTEGER REFERENCES movies(movie_id) ON DELETE CASCADE,
+                show_id     INTEGER REFERENCES shows(show_id) ON DELETE CASCADE,
+                added_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+                CHECK ( (movie_id IS NOT NULL) <> (show_id IS NOT NULL) ),
+                PRIMARY KEY (user_id, movie_id, show_id)
+            )
+        """)
+        conn.commit()
+    except Exception:
+        pass  # Table already exists or other error
+
+
+@app.post("/api/favorites")
+def add_favorite():
+    """Add a movie or show to user's favorites."""
+    _ensure_favorites_table()  # Ensure table exists
+    payload = request.get_json(force=True, silent=True) or {}
+    user_id = payload.get("user_id")
+    target_type = payload.get("target_type")
+    target_id = payload.get("target_id")
+    if not isinstance(user_id, int) or not isinstance(target_id, int):
+        return jsonify({"error": "user_id and target_id must be integers"}), 400
+    if target_type not in {"movie", "show"}:
+        return jsonify({"error": "target_type must be 'movie' or 'show'"}), 400
+
+    conn = get_db()
+    if target_type == "movie":
+        sql = "INSERT INTO favorites (user_id, movie_id, show_id) VALUES (?, ?, NULL)"
+    else:
+        sql = "INSERT INTO favorites (user_id, movie_id, show_id) VALUES (?, NULL, ?)"
+
+    try:
+        with conn:
+            conn.execute(sql, (user_id, target_id))
+    except sqlite3.IntegrityError:
+        # Already in favorites
+        return jsonify({"ok": True, "already_favorited": True})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True})
+
+
+@app.delete("/api/favorites")
+def remove_favorite():
+    """Remove a movie or show from user's favorites."""
+    _ensure_favorites_table()  # Ensure table exists
+    payload = request.get_json(force=True, silent=True) or {}
+    user_id = payload.get("user_id")
+    target_type = payload.get("target_type")
+    target_id = payload.get("target_id")
+    if not isinstance(user_id, int) or not isinstance(target_id, int):
+        return jsonify({"error": "user_id and target_id must be integers"}), 400
+    if target_type not in {"movie", "show"}:
+        return jsonify({"error": "target_type must be 'movie' or 'show'"}), 400
+
+    if target_type == "movie":
+        sql = "DELETE FROM favorites WHERE user_id = ? AND movie_id = ?"
+    else:
+        sql = "DELETE FROM favorites WHERE user_id = ? AND show_id = ?"
+
+    deleted = execute(sql, (user_id, target_id))
+    return jsonify({"ok": True, "deleted": deleted})
+
+
+@app.get("/api/favorites/check")
+def check_favorite():
+    """Check if a movie or show is in user's favorites."""
+    _ensure_favorites_table()  # Ensure table exists
+    user_id = request.args.get("user_id", type=int)
+    target_type = request.args.get("target_type")
+    target_id = request.args.get("target_id", type=int)
+    
+    if not user_id or not target_id:
+        return jsonify({"error": "user_id and target_id are required"}), 400
+    if target_type not in {"movie", "show"}:
+        return jsonify({"error": "target_type must be 'movie' or 'show'"}), 400
+
+    if target_type == "movie":
+        sql = "SELECT 1 FROM favorites WHERE user_id = ? AND movie_id = ? LIMIT 1"
+    else:
+        sql = "SELECT 1 FROM favorites WHERE user_id = ? AND show_id = ? LIMIT 1"
+
+    rows = query(sql, (user_id, target_id))
+    is_favorited = len(rows) > 0
+    return jsonify({"ok": True, "is_favorited": is_favorited})
 
 
 @app.get("/api/movie/<int:movie_id>")

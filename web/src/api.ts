@@ -171,6 +171,15 @@ export async function signup(email: string, password: string, username?: string)
 	}
 }
 
+export type CastMember = {
+	person_id: number
+	name: string
+	profile_path?: string | null
+	profile_url?: string | null
+	character?: string | null
+	cast_order?: number | null
+}
+
 export type MovieDetail = {
 	movie_id: number
 	tmdb_id: number
@@ -189,7 +198,9 @@ export type MovieDetail = {
 	genres: string[]
 	user_avg_rating?: number
 	review_count: number
+	consolidated_rating?: number
 	media_type: 'movie'
+	top_cast?: CastMember[]
 }
 
 export type ShowDetail = {
@@ -209,7 +220,9 @@ export type ShowDetail = {
 	genres: string[]
 	user_avg_rating?: number
 	review_count: number
+	consolidated_rating?: number
 	media_type: 'tv'
+	top_cast?: CastMember[]
 }
 
 export async function getMovieDetail(movieId: number) {
@@ -264,6 +277,23 @@ export async function deleteMedia(mediaType: 'movie' | 'tv', id: number) {
 	}
 }
 
+export type Review = {
+	review_id: number
+	user_id: number
+	user_email?: string
+	content: string
+	rating?: number | null
+	created_at: string
+	reactions?: Record<string, number> // emote_type -> count
+}
+
+export type ReviewResponse = {
+	ok: boolean
+	reviews: Review[]
+	count: number
+	error?: string
+}
+
 export async function getReviews(targetType: 'movie' | 'show', targetId: number) {
 	try {
 		const { data } = await api.get('/reviews', {
@@ -290,6 +320,60 @@ export async function createReview(userId: number, targetType: 'movie' | 'show',
 	} catch (err: any) {
 		const errorData = err?.response?.data
 		const msg = errorData?.error || err?.message || 'Failed to create review'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function updateReview(reviewId: number, rating?: number, content?: string) {
+	try {
+		const { data } = await api.put(`/reviews/${reviewId}`, { rating, content })
+		return data as { ok: boolean; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to update review'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function deleteReview(reviewId: number) {
+	try {
+		const { data } = await api.delete(`/reviews/${reviewId}`)
+		return data as { ok: boolean; deleted?: number; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to delete review'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export type ReactionResponse = {
+	ok: boolean
+	reactions?: Record<string, number>
+	user_reactions?: string[]
+	action?: 'added' | 'removed'
+	error?: string
+}
+
+export async function addReviewReaction(reviewId: number, emoteType: string) {
+	try {
+		const { data } = await api.post(`/reviews/${reviewId}/reactions`, {
+			emote_type: emoteType
+		})
+		return data as ReactionResponse
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to add reaction'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function getReviewReactions(reviewId: number) {
+	try {
+		const { data } = await api.get(`/reviews/${reviewId}/reactions`)
+		return data as ReactionResponse
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to get reactions'
 		return { ok: false, error: String(msg) }
 	}
 }
@@ -467,14 +551,14 @@ export type UserProfile = {
 		movies: Array<{
 			title: string
 			media_type: 'movie'
-			rating: number
+			rating?: number
 			id?: number
 			poster_path?: string | null
 		}>
 		tv: Array<{
 			title: string
 			media_type: 'tv'
-			rating: number
+			rating?: number
 			id?: number
 			poster_path?: string | null
 		}>
@@ -495,6 +579,16 @@ export type UserProfile = {
 			poster_path?: string | null
 		}>
 	}
+	recent_reviews?: Array<{
+		review_id: number
+		title: string
+		media_type: 'movie' | 'tv'
+		id?: number
+		rating: number | null
+		content: string | null
+		created_at: string
+		poster_path: string | null
+	}>
 }
 
 export async function getUserProfile() {
@@ -504,6 +598,67 @@ export async function getUserProfile() {
 	} catch (err: any) {
 		const errorData = err?.response?.data
 		const msg = errorData?.error || err?.message || 'Failed to fetch profile'
+		return { ok: false, error: String(msg) } as { ok: false; error: string }
+	}
+}
+
+export type PublicUserProfile = {
+	ok: true
+	user: {
+		user_id: number
+		display_name: string
+		created_at: string
+	}
+	stats: {
+		total_reviews: number
+		movie_reviews: number
+		tv_reviews: number
+		avg_rating: number | null
+		movie_avg_rating: number | null
+		tv_avg_rating: number | null
+	}
+	favorites: Array<{
+		title: string
+		media_type: 'movie' | 'tv'
+		rating?: number
+		id: number
+		poster_path: string | null
+	}>
+	recent_reviews: Array<{
+		review_id: number
+		title: string
+		media_type: 'movie' | 'tv'
+		id: number
+		rating: number | null
+		content: string | null
+		created_at: string
+		poster_path: string | null
+	}>
+	watchlist: {
+		movies: Array<{
+			title: string
+			media_type: 'movie'
+			id?: number
+			added_at?: string
+			poster_path?: string | null
+		}>
+		tv: Array<{
+			title: string
+			media_type: 'tv'
+			id?: number
+			added_at?: string
+			poster_path?: string | null
+		}>
+	}
+}
+
+export async function getPublicUserProfile(userId: number) {
+	try {
+		const { data } = await api.get(`/users/${userId}/public-profile`)
+		return data as PublicUserProfile | { ok: false; error: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to fetch user profile'
 		return { ok: false, error: String(msg) } as { ok: false; error: string }
 	}
 }
@@ -537,5 +692,168 @@ export async function removeFromWatchlist(userId: number, targetType: 'movie' | 
 		const errorData = err?.response?.data
 		const msg = errorData?.error || err?.message || 'Failed to remove from watchlist'
 		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function addToFavorites(userId: number, targetType: 'movie' | 'show', targetId: number) {
+	try {
+		const { data } = await api.post('/favorites', {
+			user_id: userId,
+			target_type: targetType,
+			target_id: targetId
+		})
+		return data as { ok: boolean; error?: string; already_favorited?: boolean }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to add to favorites'
+		console.error('Add to favorites error:', msg)
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function removeFromFavorites(userId: number, targetType: 'movie' | 'show', targetId: number) {
+	try {
+		const { data } = await api.delete('/favorites', {
+			data: {
+				user_id: userId,
+				target_type: targetType,
+				target_id: targetId
+			}
+		})
+		return data as { ok: boolean; deleted?: number; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to remove from favorites'
+		console.error('Remove from favorites error:', msg)
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function checkFavorite(userId: number, targetType: 'movie' | 'show', targetId: number) {
+	try {
+		const { data } = await api.get('/favorites/check', {
+			params: { user_id: userId, target_type: targetType, target_id: targetId }
+		})
+		return data as { ok: boolean; is_favorited: boolean; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to check favorite status'
+		console.error('Check favorite error:', msg)
+		return { ok: false, is_favorited: false, error: msg }
+	}
+}
+
+// ============================================================================
+// Analytics API Functions
+// ============================================================================
+
+export type TopRatedItem = MediaItem & {
+	consolidated_rating?: number
+	user_avg_rating?: number
+	review_count?: number
+}
+
+export type GenreDistribution = {
+	name: string
+	count: number
+}
+
+export async function getTopRatedMovies(limit = 5) {
+	try {
+		const { data } = await api.get('/analytics/top-movies', { params: { limit } })
+		return data as { results: TopRatedItem[] }
+	} catch (err: any) {
+		console.error('Failed to fetch top movies:', err)
+		return { results: [] }
+	}
+}
+
+export async function getTopRatedShows(limit = 5) {
+	try {
+		const { data } = await api.get('/analytics/top-shows', { params: { limit } })
+		return data as { results: TopRatedItem[] }
+	} catch (err: any) {
+		console.error('Failed to fetch top shows:', err)
+		return { results: [] }
+	}
+}
+
+export async function getGenreDistribution(type: 'movie' | 'show' = 'movie') {
+	try {
+		const { data } = await api.get('/analytics/genre-distribution', { params: { type } })
+		return data as { results: GenreDistribution[] }
+	} catch (err: any) {
+		console.error('Failed to fetch genre distribution:', err)
+		return { results: [] }
+	}
+}
+
+export type PopularWatchlistItem = {
+	media_type: 'movie' | 'show'
+	id: number
+	title: string
+	poster_path?: string | null
+	watchlist_count: number
+}
+
+export type UnreviewedItem = {
+	media_type: 'movie' | 'tv'
+	id: number
+	title: string
+	poster_path?: string | null
+	vote_average?: number | null
+	release_date?: string | null
+}
+
+export type ActiveReviewer = {
+	user_id: number
+	display_name: string
+	review_count: number
+	avg_rating?: number | null
+}
+
+export type GenreRating = {
+	name: string
+	avg_rating?: number | null
+	review_count: number
+}
+
+export async function getPopularWatchlists(limit = 10) {
+	try {
+		const { data } = await api.get('/analytics/popular-watchlists', { params: { limit } })
+		return data as { results: PopularWatchlistItem[] }
+	} catch (err: any) {
+		console.error('Failed to fetch popular watchlists:', err)
+		return { results: [] }
+	}
+}
+
+export async function getUnreviewedTitles(type: 'all' | 'movie' | 'show' = 'all', limit = 20) {
+	try {
+		const { data } = await api.get('/analytics/unreviewed', { params: { type, limit } })
+		return data as { results: UnreviewedItem[] }
+	} catch (err: any) {
+		console.error('Failed to fetch unreviewed titles:', err)
+		return { results: [] }
+	}
+}
+
+export async function getActiveReviewers(minReviews = 3, limit = 10) {
+	try {
+		const { data } = await api.get('/analytics/active-reviewers', { params: { min_reviews: minReviews, limit } })
+		return data as { results: ActiveReviewer[] }
+	} catch (err: any) {
+		console.error('Failed to fetch active reviewers:', err)
+		return { results: [] }
+	}
+}
+
+export async function getGenreRatings(type: 'movie' | 'show' = 'movie') {
+	try {
+		const { data } = await api.get('/analytics/genre-ratings', { params: { type } })
+		return data as { results: GenreRating[] }
+	} catch (err: any) {
+		console.error('Failed to fetch genre ratings:', err)
+		return { results: [] }
 	}
 }
