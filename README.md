@@ -1,4 +1,4 @@
-# CSE-111 Class Project — Movie & TV Analytics (Flask + Vite)
+# PlotSignal — Movie & TV Analytics (Flask + Vite)
 
 A small full-stack project that ingests data from TMDb and exposes it via a Flask API, with a Vite (React + TypeScript) frontend.
 
