@@ -146,6 +146,11 @@ export async function getNewReleases(limit = 12, type: 'all' | 'movie' | 'tv' = 
 	return (data?.results ?? []) as MediaItem[]
 }
 
+export async function getFutureReleases(limit = 12, type: 'all' | 'movie' | 'tv' = 'all') {
+	const { data } = await api.get('/future-releases', { params: { limit, type } })
+	return (data?.results ?? []) as MediaItem[]
+}
+
 export type LoginResponse = { ok: true; user: string; email: string; user_id?: number; display_name?: string; is_admin?: boolean } | { ok: false; error: string }
 
 export async function login(email: string, password: string) {

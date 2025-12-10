@@ -788,7 +788,7 @@ def get_user_profile():
         )
         tv_discussion_count = int(tv_discussion_rows[0]["discussion_count"] or 0) if tv_discussion_rows else 0
 
-        # Favorites: items from favorites table with poster images
+        # Favorites: items from favorites table with poster images and metadata
         _ensure_favorites_table()  # Ensure table exists
         favorite_rows = query(
             """
@@ -798,8 +798,14 @@ def get_user_profile():
                 f.added_at,
                 m.title AS movie_title,
                 m.poster_path AS movie_poster,
+                m.tmdb_vote_avg AS movie_vote_average,
+                m.original_language AS movie_original_language,
+                m.release_year AS movie_release_year,
                 s.title AS show_title,
-                s.poster_path AS show_poster
+                s.poster_path AS show_poster,
+                s.tmdb_vote_avg AS show_vote_average,
+                s.original_language AS show_original_language,
+                s.first_air_date AS show_first_air_date
             FROM favorites f
             LEFT JOIN movies m ON f.movie_id = m.movie_id
             LEFT JOIN shows s ON f.show_id = s.show_id
@@ -811,19 +817,45 @@ def get_user_profile():
         favorites: list[dict[str, object]] = []
         for row in favorite_rows:
             data = dict(row)
+            is_movie = data.get("movie_id") is not None
             title = data.get("movie_title") or data.get("show_title") or "Untitled"
             poster_path = data.get("movie_poster") or data.get("show_poster")
-            media_type = "movie" if data.get("movie_id") is not None else "tv"
+            media_type = "movie" if is_movie else "tv"
+            
+            # Get vote_average
+            vote_average = data.get("movie_vote_average") if is_movie else data.get("show_vote_average")
+            
+            # Get original_language
+            original_language = data.get("movie_original_language") if is_movie else data.get("show_original_language")
+            
+            # Get release_date
+            release_date = None
+            if is_movie:
+                release_year = data.get("movie_release_year")
+                if release_year:
+                    release_date = str(release_year)
+            else:
+                first_air_date = data.get("show_first_air_date")
+                if first_air_date:
+                    # Extract year from first_air_date (format: YYYY-MM-DD or just year)
+                    if isinstance(first_air_date, str) and len(first_air_date) >= 4:
+                        release_date = first_air_date[:4]
+                    elif isinstance(first_air_date, (int, float)):
+                        release_date = str(int(first_air_date))
+            
             favorites.append(
                 {
                     "title": title,
                     "media_type": media_type,
-                    "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
+                    "id": data.get("movie_id") if is_movie else data.get("show_id"),
                     "poster_path": poster_path,
+                    "vote_average": float(vote_average) if vote_average is not None else None,
+                    "original_language": original_language,
+                    "release_date": release_date,
                 }
             )
 
-        # Watchlist items with poster images
+        # Watchlist items with poster images and metadata
         watchlist_rows = query(
             """
             SELECT
@@ -833,8 +865,14 @@ def get_user_profile():
                 w.added_at,
                 m.title AS movie_title,
                 m.poster_path AS movie_poster,
+                m.tmdb_vote_avg AS movie_vote_average,
+                m.original_language AS movie_original_language,
+                m.release_year AS movie_release_year,
                 s.title AS show_title,
-                s.poster_path AS show_poster
+                s.poster_path AS show_poster,
+                s.tmdb_vote_avg AS show_vote_average,
+                s.original_language AS show_original_language,
+                s.first_air_date AS show_first_air_date
             FROM watchlists w
             LEFT JOIN movies m ON w.movie_id = m.movie_id
             LEFT JOIN shows s ON w.show_id = s.show_id
@@ -846,16 +884,42 @@ def get_user_profile():
         watchlist: list[dict[str, object]] = []
         for row in watchlist_rows:
             data = dict(row)
+            is_movie = data.get("movie_id") is not None
             title = data.get("movie_title") or data.get("show_title") or "Untitled"
             poster_path = data.get("movie_poster") or data.get("show_poster")
-            media_type = "movie" if data.get("movie_id") is not None else "tv"
+            media_type = "movie" if is_movie else "tv"
+            
+            # Get vote_average
+            vote_average = data.get("movie_vote_average") if is_movie else data.get("show_vote_average")
+            
+            # Get original_language
+            original_language = data.get("movie_original_language") if is_movie else data.get("show_original_language")
+            
+            # Get release_date
+            release_date = None
+            if is_movie:
+                release_year = data.get("movie_release_year")
+                if release_year:
+                    release_date = str(release_year)
+            else:
+                first_air_date = data.get("show_first_air_date")
+                if first_air_date:
+                    # Extract year from first_air_date (format: YYYY-MM-DD or just year)
+                    if isinstance(first_air_date, str) and len(first_air_date) >= 4:
+                        release_date = first_air_date[:4]
+                    elif isinstance(first_air_date, (int, float)):
+                        release_date = str(int(first_air_date))
+            
             watchlist.append(
                 {
                     "title": title,
                     "media_type": media_type,
-                    "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
+                    "id": data.get("movie_id") if is_movie else data.get("show_id"),
                     "added_at": data.get("added_at"),
                     "poster_path": poster_path,
+                    "vote_average": float(vote_average) if vote_average is not None else None,
+                    "original_language": original_language,
+                    "release_date": release_date,
                 }
             )
 
@@ -1014,7 +1078,7 @@ def get_public_user_profile(user_id: int):
             if all_ratings and all_ratings[0]["avg_rating"]:
                 overall_avg = round(float(all_ratings[0]["avg_rating"]), 1)
 
-        # Favorites: items from favorites table with poster images
+        # Favorites: items from favorites table with poster images and metadata
         _ensure_favorites_table()  # Ensure table exists
         favorite_rows = query(
             """
@@ -1024,8 +1088,14 @@ def get_public_user_profile(user_id: int):
                 f.added_at,
                 m.title AS movie_title,
                 m.poster_path AS movie_poster,
+                m.tmdb_vote_avg AS movie_vote_average,
+                m.original_language AS movie_original_language,
+                m.release_year AS movie_release_year,
                 s.title AS show_title,
-                s.poster_path AS show_poster
+                s.poster_path AS show_poster,
+                s.tmdb_vote_avg AS show_vote_average,
+                s.original_language AS show_original_language,
+                s.first_air_date AS show_first_air_date
             FROM favorites f
             LEFT JOIN movies m ON f.movie_id = m.movie_id
             LEFT JOIN shows s ON f.show_id = s.show_id
@@ -1037,14 +1107,40 @@ def get_public_user_profile(user_id: int):
         favorites = []
         for row in favorite_rows:
             data = dict(row)
+            is_movie = data.get("movie_id") is not None
             title = data.get("movie_title") or data.get("show_title") or "Untitled"
             poster_path = data.get("movie_poster") or data.get("show_poster")
-            media_type = "movie" if data.get("movie_id") is not None else "tv"
+            media_type = "movie" if is_movie else "tv"
+            
+            # Get vote_average
+            vote_average = data.get("movie_vote_average") if is_movie else data.get("show_vote_average")
+            
+            # Get original_language
+            original_language = data.get("movie_original_language") if is_movie else data.get("show_original_language")
+            
+            # Get release_date
+            release_date = None
+            if is_movie:
+                release_year = data.get("movie_release_year")
+                if release_year:
+                    release_date = str(release_year)
+            else:
+                first_air_date = data.get("show_first_air_date")
+                if first_air_date:
+                    # Extract year from first_air_date (format: YYYY-MM-DD or just year)
+                    if isinstance(first_air_date, str) and len(first_air_date) >= 4:
+                        release_date = first_air_date[:4]
+                    elif isinstance(first_air_date, (int, float)):
+                        release_date = str(int(first_air_date))
+            
             favorites.append({
                 "title": title,
                 "media_type": media_type,
-                "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
+                "id": data.get("movie_id") if is_movie else data.get("show_id"),
                 "poster_path": poster_path,
+                "vote_average": float(vote_average) if vote_average is not None else None,
+                "original_language": original_language,
+                "release_date": release_date,
             })
 
         # Recent reviews (last 10)
@@ -1087,7 +1183,7 @@ def get_public_user_profile(user_id: int):
                 "poster_path": poster_path,
             })
 
-        # Watchlist items with poster images
+        # Watchlist items with poster images and metadata
         watchlist_rows = query(
             """
             SELECT
@@ -1097,8 +1193,14 @@ def get_public_user_profile(user_id: int):
                 w.added_at,
                 m.title AS movie_title,
                 m.poster_path AS movie_poster,
+                m.tmdb_vote_avg AS movie_vote_average,
+                m.original_language AS movie_original_language,
+                m.release_year AS movie_release_year,
                 s.title AS show_title,
-                s.poster_path AS show_poster
+                s.poster_path AS show_poster,
+                s.tmdb_vote_avg AS show_vote_average,
+                s.original_language AS show_original_language,
+                s.first_air_date AS show_first_air_date
             FROM watchlists w
             LEFT JOIN movies m ON w.movie_id = m.movie_id
             LEFT JOIN shows s ON w.show_id = s.show_id
@@ -1110,15 +1212,41 @@ def get_public_user_profile(user_id: int):
         watchlist = []
         for row in watchlist_rows:
             data = dict(row)
+            is_movie = data.get("movie_id") is not None
             title = data.get("movie_title") or data.get("show_title") or "Untitled"
             poster_path = data.get("movie_poster") or data.get("show_poster")
-            media_type = "movie" if data.get("movie_id") is not None else "tv"
+            media_type = "movie" if is_movie else "tv"
+            
+            # Get vote_average
+            vote_average = data.get("movie_vote_average") if is_movie else data.get("show_vote_average")
+            
+            # Get original_language
+            original_language = data.get("movie_original_language") if is_movie else data.get("show_original_language")
+            
+            # Get release_date
+            release_date = None
+            if is_movie:
+                release_year = data.get("movie_release_year")
+                if release_year:
+                    release_date = str(release_year)
+            else:
+                first_air_date = data.get("show_first_air_date")
+                if first_air_date:
+                    # Extract year from first_air_date (format: YYYY-MM-DD or just year)
+                    if isinstance(first_air_date, str) and len(first_air_date) >= 4:
+                        release_date = first_air_date[:4]
+                    elif isinstance(first_air_date, (int, float)):
+                        release_date = str(int(first_air_date))
+            
             watchlist.append({
                 "title": title,
                 "media_type": media_type,
-                "id": data.get("movie_id") if media_type == "movie" else data.get("show_id"),
+                "id": data.get("movie_id") if is_movie else data.get("show_id"),
                 "added_at": data.get("added_at"),
                 "poster_path": poster_path,
+                "vote_average": float(vote_average) if vote_average is not None else None,
+                "original_language": original_language,
+                "release_date": release_date,
             })
 
         # Separate watchlist by type
@@ -1343,7 +1471,12 @@ def login_route():
 def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | None = None, language: str | None = None) -> dict[str, Any]:
     table = "movies" if media_type == "movie" else "shows"
     id_col = "movie_id" if media_type == "movie" else "show_id"
-    release_col = "release_year" if media_type == "movie" else "first_air_date"
+    # For movies, prefer release_date (full date) over release_year, fallback to release_year
+    # For shows, use first_air_date (already full date)
+    if media_type == "movie":
+        release_col = "COALESCE(t.release_date, CAST(t.release_year AS TEXT))"
+    else:
+        release_col = "t.first_air_date"
     offset = (page - 1) * limit
     genre_table = "movie_genres" if media_type == "movie" else "show_genres"
     
@@ -1375,7 +1508,8 @@ def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | 
     elif sort == "title":
         order_clause = "t.title ASC"
     elif sort == "release_date":
-        order_clause = f"(t.{release_col} IS NULL), t.{release_col} DESC, t.title"
+        # Use full date for proper chronological sorting (newest first)
+        order_clause = f"({release_col} IS NULL), {release_col} DESC, t.title"
     else:  # popularity (default)
         order_clause = f"(t.popularity IS NULL), t.popularity DESC, t.title"
 
@@ -1393,6 +1527,12 @@ def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | 
     review_table = "reviews"
     review_id_col = "movie_id" if media_type == "movie" else "show_id"
     
+    # For SELECT, we need the actual column names, not the COALESCE expression
+    if media_type == "movie":
+        release_select = "COALESCE(t.release_date, CAST(t.release_year AS TEXT)) AS release_value"
+    else:
+        release_select = "t.first_air_date AS release_value"
+    
     rows = query(
         f"""
         SELECT DISTINCT t.{id_col} AS record_id,
@@ -1402,7 +1542,7 @@ def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | 
                t.poster_path,
                t.tmdb_vote_avg,
                t.popularity,
-               t.{release_col} AS release_value,
+               {release_select},
                t.original_language,
                (
                    SELECT AVG(rating) FROM {review_table} WHERE {review_id_col} = t.{id_col}
@@ -2310,8 +2450,9 @@ def new_releases():
                    m.poster_path,
                    m.tmdb_vote_avg AS score,
                    m.popularity,
-                   m.release_year AS release_sort,
-                   CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
+                   COALESCE(m.release_date, CAST(m.release_year AS TEXT)) AS release_sort,
+                   COALESCE(m.release_date, CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END) AS release_date,
+                   m.original_language,
                    GROUP_CONCAT(DISTINCT g.name) AS genres,
                    (
                        SELECT AVG(rating) FROM reviews WHERE movie_id = m.movie_id
@@ -2324,7 +2465,16 @@ def new_releases():
             INNER JOIN genres g ON g.genre_id = mg.genre_id
             WHERE m.release_year IS NOT NULL AND m.overview IS NOT NULL AND m.overview != ''
             GROUP BY m.movie_id
-            ORDER BY (release_sort IS NULL), release_sort DESC, (score IS NULL), score DESC, popularity DESC, title
+            ORDER BY 
+                -- Prioritize movies with actual release dates over year-only
+                (m.release_date IS NULL),
+                -- Sort by release date (newest first)
+                CASE 
+                    WHEN m.release_date IS NOT NULL THEN m.release_date
+                    ELSE CAST(m.release_year AS TEXT) || '-12-31'
+                END DESC,
+                -- Then by score and popularity
+                (score IS NULL), score DESC, popularity DESC, title
             LIMIT ?
         """
         rows = query(sql, (limit,))
@@ -2343,6 +2493,7 @@ def new_releases():
                        ELSE NULL
                    END AS release_sort,
                    s.first_air_date AS release_date,
+                   s.original_language,
                    GROUP_CONCAT(DISTINCT g.name) AS genres,
                    (
                        SELECT AVG(rating) FROM reviews WHERE show_id = s.show_id
@@ -2372,8 +2523,9 @@ def new_releases():
                        m.poster_path,
                        m.tmdb_vote_avg AS score,
                        m.popularity,
-                       m.release_year AS release_sort,
-                       CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END AS release_date,
+                       COALESCE(m.release_date, CAST(m.release_year AS TEXT)) AS release_sort,
+                       COALESCE(m.release_date, CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END) AS release_date,
+                       m.original_language,
                        GROUP_CONCAT(DISTINCT g.name) AS genres,
                        (
                            SELECT AVG(rating) FROM reviews WHERE movie_id = m.movie_id
@@ -2400,6 +2552,7 @@ def new_releases():
                            ELSE NULL
                        END AS release_sort,
                        s.first_air_date AS release_date,
+                       s.original_language,
                        GROUP_CONCAT(DISTINCT g.name) AS genres,
                        (
                            SELECT AVG(rating) FROM reviews WHERE show_id = s.show_id
@@ -2413,7 +2566,17 @@ def new_releases():
                 WHERE s.first_air_date IS NOT NULL AND s.overview IS NOT NULL AND s.overview != ''
                 GROUP BY s.show_id
             )
-            ORDER BY (release_sort IS NULL), release_sort DESC, (score IS NULL), score DESC, popularity DESC, title
+            ORDER BY 
+                -- Prioritize movies/shows with actual release dates over year-only
+                (release_date IS NULL OR LENGTH(release_date) < 10),
+                -- Sort by release date (newest first)
+                CASE 
+                    WHEN release_date IS NOT NULL AND LENGTH(release_date) >= 10 THEN release_date
+                    WHEN release_sort IS NOT NULL THEN CAST(release_sort AS TEXT) || '-12-31'
+                    ELSE '0000-01-01'
+                END DESC,
+                -- Then by score and popularity
+                (score IS NULL), score DESC, popularity DESC, title
             LIMIT ?
             """,
             (limit,),
@@ -2448,7 +2611,240 @@ def new_releases():
             "popularity": data.get("popularity"),
             "release_date": data.get("release_date"),
             "genres": genres,
-            "original_language": None,
+            "original_language": data.get("original_language"),
+        }
+        if user_rating is not None:
+            result["user_avg_rating"] = round(user_rating, 2)
+        if review_count > 0:
+            result["review_count"] = review_count
+        results.append(result)
+    return jsonify({"results": results})
+
+
+@app.get("/api/future-releases")
+def future_releases():
+    limit = _get_int(request.args.get("limit"), 12, 1, MAX_PAGE_SIZE)
+    media_filter = (request.args.get("type") or "all").lower()
+    
+    # Get current date for filtering (use timestamp threshold)
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    current_year = datetime.now().year
+
+    if media_filter == "movie":
+        sql = """
+            SELECT 'movie' AS media_type,
+                   m.movie_id AS item_id,
+                   m.tmdb_id,
+                   m.title,
+                   m.overview,
+                   m.poster_path,
+                   m.tmdb_vote_avg AS score,
+                   m.popularity,
+                   COALESCE(m.release_date, CAST(m.release_year AS TEXT)) AS release_sort,
+                   COALESCE(m.release_date, CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END) AS release_date,
+                   m.original_language,
+                   GROUP_CONCAT(DISTINCT g.name) AS genres,
+                   (
+                       SELECT AVG(rating) FROM reviews WHERE movie_id = m.movie_id
+                   ) AS user_avg_rating,
+                   (
+                       SELECT COUNT(*) FROM reviews WHERE movie_id = m.movie_id
+                   ) AS review_count
+            FROM movies m
+            INNER JOIN movie_genres mg ON mg.movie_id = m.movie_id
+            INNER JOIN genres g ON g.genre_id = mg.genre_id
+            WHERE m.release_year IS NOT NULL 
+              AND m.overview IS NOT NULL 
+              AND m.overview != ''
+              AND (
+                  -- Has full release date and it's in the future
+                  (m.release_date IS NOT NULL AND m.release_date > ?)
+                  OR
+                  -- Year-only entry in future year (exclude current year without specific date)
+                  (m.release_date IS NULL AND m.release_year > ?)
+              )
+            GROUP BY m.movie_id
+            ORDER BY 
+                -- Prioritize movies with actual release dates over year-only
+                (m.release_date IS NULL),
+                -- Sort by release date (earliest future first)
+                CASE 
+                    WHEN m.release_date IS NOT NULL THEN m.release_date
+                    ELSE CAST(m.release_year AS TEXT) || '-01-01'
+                END ASC,
+                -- Then by score and popularity
+                (score IS NULL), score DESC, popularity DESC, title
+            LIMIT ?
+        """
+        rows = query(sql, (today, current_year, limit))
+    elif media_filter == "tv":
+        sql = """
+            SELECT 'tv' AS media_type,
+                   s.show_id AS item_id,
+                   s.tmdb_id,
+                   s.title,
+                   s.overview,
+                   s.poster_path,
+                   s.tmdb_vote_avg AS score,
+                   s.popularity,
+                   CASE
+                       WHEN s.first_air_date IS NOT NULL THEN CAST(substr(s.first_air_date, 1, 4) AS INTEGER)
+                       ELSE NULL
+                   END AS release_sort,
+                   s.first_air_date AS release_date,
+                   s.original_language,
+                   GROUP_CONCAT(DISTINCT g.name) AS genres,
+                   (
+                       SELECT AVG(rating) FROM reviews WHERE show_id = s.show_id
+                   ) AS user_avg_rating,
+                   (
+                       SELECT COUNT(*) FROM reviews WHERE show_id = s.show_id
+                   ) AS review_count
+            FROM shows s
+            INNER JOIN show_genres sg ON sg.show_id = s.show_id
+            INNER JOIN genres g ON g.genre_id = sg.genre_id
+            WHERE s.first_air_date IS NOT NULL 
+              AND s.overview IS NOT NULL 
+              AND s.overview != ''
+              AND (
+                  -- Has full air date and it's in the future
+                  (s.first_air_date > ?)
+                  OR
+                  -- Year-only entry in future year (exclude current year without specific date)
+                  (CAST(substr(s.first_air_date, 1, 4) AS INTEGER) > ?)
+              )
+            GROUP BY s.show_id
+            ORDER BY 
+                -- Prioritize shows with actual air dates over year-only
+                (s.first_air_date IS NULL),
+                -- Sort by air date (earliest future first)
+                CASE 
+                    WHEN s.first_air_date IS NOT NULL THEN s.first_air_date
+                    WHEN release_sort IS NOT NULL THEN CAST(release_sort AS TEXT) || '-01-01'
+                    ELSE '9999-12-31'
+                END ASC,
+                -- Then by score and popularity
+                (score IS NULL), score DESC, popularity DESC, title
+            LIMIT ?
+        """
+        rows = query(sql, (today, current_year, limit))
+    else:
+        rows = query(
+            """
+            SELECT *
+            FROM (
+                SELECT 'movie' AS media_type,
+                       m.movie_id AS item_id,
+                       m.tmdb_id,
+                       m.title,
+                       m.overview,
+                       m.poster_path,
+                       m.tmdb_vote_avg AS score,
+                       m.popularity,
+                       COALESCE(m.release_date, CAST(m.release_year AS TEXT)) AS release_sort,
+                       COALESCE(m.release_date, CASE WHEN m.release_year IS NOT NULL THEN CAST(m.release_year AS TEXT) ELSE NULL END) AS release_date,
+                       m.original_language,
+                       GROUP_CONCAT(DISTINCT g.name) AS genres,
+                       (
+                           SELECT AVG(rating) FROM reviews WHERE movie_id = m.movie_id
+                       ) AS user_avg_rating,
+                       (
+                           SELECT COUNT(*) FROM reviews WHERE movie_id = m.movie_id
+                       ) AS review_count
+                FROM movies m
+                INNER JOIN movie_genres mg ON mg.movie_id = m.movie_id
+                INNER JOIN genres g ON g.genre_id = mg.genre_id
+                WHERE m.release_year IS NOT NULL 
+                  AND m.overview IS NOT NULL 
+                  AND m.overview != ''
+                  AND (
+                      (m.release_date IS NOT NULL AND m.release_date > ?)
+                      OR
+                      (m.release_date IS NULL AND m.release_year > ?)
+                  )
+                GROUP BY m.movie_id
+                UNION ALL
+                SELECT 'tv' AS media_type,
+                       s.show_id AS item_id,
+                       s.tmdb_id,
+                       s.title,
+                       s.overview,
+                       s.poster_path,
+                       s.tmdb_vote_avg AS score,
+                       s.popularity,
+                       CASE
+                           WHEN s.first_air_date IS NOT NULL THEN CAST(substr(s.first_air_date, 1, 4) AS INTEGER)
+                           ELSE NULL
+                       END AS release_sort,
+                       s.first_air_date AS release_date,
+                       s.original_language,
+                       GROUP_CONCAT(DISTINCT g.name) AS genres,
+                       (
+                           SELECT AVG(rating) FROM reviews WHERE show_id = s.show_id
+                       ) AS user_avg_rating,
+                       (
+                           SELECT COUNT(*) FROM reviews WHERE show_id = s.show_id
+                       ) AS review_count
+                FROM shows s
+                INNER JOIN show_genres sg ON sg.show_id = s.show_id
+                INNER JOIN genres g ON g.genre_id = sg.genre_id
+                WHERE s.first_air_date IS NOT NULL 
+                  AND s.overview IS NOT NULL 
+                  AND s.overview != ''
+                  AND (
+                      (s.first_air_date > ?)
+                      OR
+                      (CAST(substr(s.first_air_date, 1, 4) AS INTEGER) > ?)
+                  )
+                GROUP BY s.show_id
+            )
+            ORDER BY 
+                -- Prioritize items with actual release dates over year-only
+                (release_date IS NULL OR LENGTH(release_date) < 10),
+                -- Sort by release date (earliest future first)
+                CASE 
+                    WHEN release_date IS NOT NULL AND LENGTH(release_date) >= 10 THEN release_date
+                    WHEN release_sort IS NOT NULL THEN CAST(release_sort AS TEXT) || '-01-01'
+                    ELSE '9999-12-31'
+                END ASC,
+                -- Then by score and popularity
+                (score IS NULL), score DESC, popularity DESC, title
+            LIMIT ?
+            """,
+            (today, current_year, today, current_year, limit),
+        )
+
+    results = []
+    for row in rows:
+        data = dict(row)
+        genres = [g.strip() for g in (data.get("genres") or "").split(",") if g.strip()]
+        
+        # Calculate consolidated rating
+        tmdb_rating = data.get("score")
+        user_rating = float(data["user_avg_rating"]) if data.get("user_avg_rating") is not None else None
+        review_count = data.get("review_count") or 0
+        consolidated = calculate_consolidated_rating(
+            tmdb_rating=tmdb_rating,
+            user_rating=user_rating,
+            user_count=review_count,
+            confidence=5.0
+        )
+        
+        result = {
+            "media_type": data["media_type"],
+            "id": data["item_id"],
+            "tmdb_id": data["tmdb_id"],
+            "title": data["title"],
+            "overview": data.get("overview") or "",
+            "poster_path": data.get("poster_path"),
+            "backdrop_path": None,
+            "vote_average": tmdb_rating,
+            "consolidated_rating": round(consolidated, 2) if consolidated is not None else None,
+            "popularity": data.get("popularity"),
+            "release_date": data.get("release_date"),
+            "genres": genres,
+            "original_language": data.get("original_language"),
         }
         if user_rating is not None:
             result["user_avg_rating"] = round(user_rating, 2)

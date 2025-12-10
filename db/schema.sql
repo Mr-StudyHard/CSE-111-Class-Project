@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS movies (
     tmdb_id         INTEGER UNIQUE NOT NULL,
     title           TEXT NOT NULL,
     release_year    INTEGER,
+    release_date    TEXT,
     runtime_min     INTEGER,
     overview        TEXT,
     poster_path     TEXT,

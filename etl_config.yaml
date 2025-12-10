@@ -25,7 +25,7 @@ data_limits:
   movies: 100
   
   # Number of popular TV shows to fetch per run
-  shows: 50
+  shows: 100
   
   # Number of episodes to fetch per season (to limit API calls)
   episodes_per_season: 10

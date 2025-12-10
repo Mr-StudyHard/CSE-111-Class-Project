@@ -1,0 +1,74 @@
+2025-12-10 03:38:42,556 - PopulateReleases - INFO - ================================================================================
+2025-12-10 03:38:42,556 - PopulateReleases - INFO - Populate Releases Script
+2025-12-10 03:38:42,557 - PopulateReleases - INFO - Reference Date: 2025-12-10
+2025-12-10 03:38:42,557 - PopulateReleases - INFO - ================================================================================
+2025-12-10 03:38:42,569 - TMDbETLService - INFO - Database path: C:\Users\Ak407\OneDrive\CSE 111 Project\movie-tv-analytics\movie_tracker.db
+2025-12-10 03:38:42,574 - PopulateReleases - INFO - Syncing genres...
+2025-12-10 03:38:42,574 - TMDbETLService - INFO - Syncing genres from TMDb...
+2025-12-10 03:38:43,301 - TMDbETLService - INFO - Synced 27 genres
+2025-12-10 03:38:43,301 - PopulateReleases - INFO - 
+================================================================================
+2025-12-10 03:38:43,301 - PopulateReleases - INFO - FETCHING FUTURE RELEASES
+2025-12-10 03:38:43,301 - PopulateReleases - INFO - ================================================================================
+2025-12-10 03:38:43,301 - PopulateReleases - INFO - 
+Fetching future movies (release_date >= 2025-12-10)...
+2025-12-10 03:38:43,301 - PopulateReleases - INFO - Discovering movies from 2025-12-10 to future...
+2025-12-10 03:38:43,674 - PopulateReleases - INFO - Fetched page 1: 20 movies (total: 20)
+2025-12-10 03:38:44,146 - PopulateReleases - INFO - Fetched page 2: 20 movies (total: 40)
+2025-12-10 03:38:44,530 - PopulateReleases - INFO - Fetched page 3: 20 movies (total: 60)
+2025-12-10 03:38:44,530 - PopulateReleases - INFO - Total movies discovered: 60
+2025-12-10 03:38:44,530 - PopulateReleases - INFO - Processing 50 discovered movies...
+2025-12-10 03:39:02,512 - PopulateReleases - INFO - 
+Fetching future TV shows (first_air_date >= 2025-12-10)...
+2025-12-10 03:39:02,514 - PopulateReleases - INFO - Discovering TV shows from 2025-12-10 to future...
+2025-12-10 03:39:02,872 - PopulateReleases - INFO - Fetched page 1: 20 shows (total: 20)
+2025-12-10 03:39:03,242 - PopulateReleases - INFO - Fetched page 2: 20 shows (total: 40)
+2025-12-10 03:39:03,612 - PopulateReleases - INFO - Fetched page 3: 20 shows (total: 60)
+2025-12-10 03:39:03,612 - PopulateReleases - INFO - Total shows discovered: 60
+2025-12-10 03:39:03,612 - PopulateReleases - INFO - Processing 50 discovered TV shows...
+2025-12-10 03:39:21,950 - PopulateReleases - INFO - 
+================================================================================
+2025-12-10 03:39:21,951 - PopulateReleases - INFO - FETCHING NEW RELEASES (Last 90 Days)
+2025-12-10 03:39:21,951 - PopulateReleases - INFO - ================================================================================
+2025-12-10 03:39:21,951 - PopulateReleases - INFO - 
+Fetching new movies (2025-09-11 to 2025-12-10)...
+2025-12-10 03:39:21,951 - PopulateReleases - INFO - Discovering movies from 2025-09-11 to 2025-12-10...
+2025-12-10 03:39:22,330 - PopulateReleases - INFO - Fetched page 1: 20 movies (total: 20)
+2025-12-10 03:39:22,705 - PopulateReleases - INFO - Fetched page 2: 20 movies (total: 40)
+2025-12-10 03:39:23,084 - PopulateReleases - INFO - Fetched page 3: 20 movies (total: 60)
+2025-12-10 03:39:23,086 - PopulateReleases - INFO - Total movies discovered: 60
+2025-12-10 03:39:23,086 - PopulateReleases - INFO - Processing 50 discovered movies...
+2025-12-10 03:41:30,019 - PopulateReleases - INFO - Processed 70 movies...
+2025-12-10 03:43:18,388 - PopulateReleases - INFO - Processed 90 movies...
+2025-12-10 03:44:14,390 - PopulateReleases - INFO - Processed 100 movies...
+2025-12-10 03:44:14,390 - PopulateReleases - INFO - 
+Fetching new TV shows (2025-09-11 to 2025-12-10)...
+2025-12-10 03:44:14,390 - PopulateReleases - INFO - Discovering TV shows from 2025-09-11 to 2025-12-10...
+2025-12-10 03:44:14,764 - PopulateReleases - INFO - Fetched page 1: 20 shows (total: 20)
+2025-12-10 03:44:15,145 - PopulateReleases - INFO - Fetched page 2: 20 shows (total: 40)
+2025-12-10 03:44:15,530 - PopulateReleases - INFO - Fetched page 3: 20 shows (total: 60)
+2025-12-10 03:44:15,530 - PopulateReleases - INFO - Total shows discovered: 60
+2025-12-10 03:44:15,530 - PopulateReleases - INFO - Processing 50 discovered TV shows...
+2025-12-10 03:45:15,374 - PopulateReleases - INFO - Processed 60 shows...
+2025-12-10 03:46:08,164 - PopulateReleases - INFO - Processed 70 shows...
+2025-12-10 03:47:06,460 - PopulateReleases - INFO - Processed 80 shows...
+2025-12-10 03:47:34,361 - PopulateReleases - INFO - Processed 90 shows...
+2025-12-10 03:48:06,998 - PopulateReleases - INFO - Processed 100 shows...
+2025-12-10 03:48:06,998 - PopulateReleases - INFO - 
+================================================================================
+2025-12-10 03:48:06,998 - PopulateReleases - INFO - SUMMARY
+2025-12-10 03:48:06,999 - PopulateReleases - INFO - ================================================================================
+2025-12-10 03:48:06,999 - PopulateReleases - INFO - Movies processed: 100
+2025-12-10 03:48:06,999 - PopulateReleases - INFO -   - Inserted: 0
+2025-12-10 03:48:06,999 - PopulateReleases - INFO -   - Updated: 42
+2025-12-10 03:48:06,999 - PopulateReleases - INFO -   - Skipped: 58
+2025-12-10 03:48:06,999 - PopulateReleases - INFO - Shows processed: 100
+2025-12-10 03:48:06,999 - PopulateReleases - INFO -   - Inserted: 3
+2025-12-10 03:48:06,999 - PopulateReleases - INFO -   - Updated: 28
+2025-12-10 03:48:06,999 - PopulateReleases - INFO -   - Skipped: 69
+2025-12-10 03:48:06,999 - PopulateReleases - INFO - Genres synced: 27
+2025-12-10 03:48:06,999 - PopulateReleases - INFO - People synced: 1514
+2025-12-10 03:48:06,999 - PopulateReleases - INFO - API calls made: 1726
+2025-12-10 03:48:06,999 - PopulateReleases - INFO - Errors: 0
+2025-12-10 03:48:06,999 - PopulateReleases - INFO - ================================================================================
+2025-12-10 03:48:07,059 - PopulateReleases - INFO - Database connection closed.

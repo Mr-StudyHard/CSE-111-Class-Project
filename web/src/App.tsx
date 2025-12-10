@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, updateReview, deleteReview, type Review, getUserByEmail, setAuthToken, clearAuthToken, getUserSettings, updateUserSettings, type UserSettings, getUserProfile, type UserProfile, deleteUserAccount, addToWatchlist, removeFromWatchlist, addToFavorites, removeFromFavorites, checkFavorite, getTopRatedMovies, getTopRatedShows, getGenreDistribution, type TopRatedItem, type GenreDistribution, getPopularWatchlists, getUnreviewedTitles, getActiveReviewers, getGenreRatings, type PopularWatchlistItem, type UnreviewedItem, type ActiveReviewer, type GenreRating, getPublicUserProfile, type PublicUserProfile, addReviewReaction, getReviewReactions } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getFutureReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, updateReview, deleteReview, type Review, getUserByEmail, setAuthToken, clearAuthToken, getUserSettings, updateUserSettings, type UserSettings, getUserProfile, type UserProfile, deleteUserAccount, addToWatchlist, removeFromWatchlist, addToFavorites, removeFromFavorites, checkFavorite, getTopRatedMovies, getTopRatedShows, getGenreDistribution, type TopRatedItem, type GenreDistribution, getPopularWatchlists, getUnreviewedTitles, getActiveReviewers, getGenreRatings, type PopularWatchlistItem, type UnreviewedItem, type ActiveReviewer, type GenreRating, getPublicUserProfile, type PublicUserProfile, addReviewReaction, getReviewReactions } from './api'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
 type ReleaseFilter = 'all' | 'movie' | 'tv'
 
 const NEW_RELEASE_FETCH_LIMIT = 24
 const NEW_RELEASE_PAGE_SIZE = 6
+const FUTURE_RELEASE_FETCH_LIMIT = 24
+const FUTURE_RELEASE_PAGE_SIZE = 6
 const LIST_PAGE_SIZE = 24
 
 const languageDisplayNames =
@@ -201,6 +203,15 @@ export default function App() {
   const [newReleaseSlideDirection, setNewReleaseSlideDirection] = useState<'left' | 'right' | 'none'>('none')
   const [newReleaseTransitionType, setNewReleaseTransitionType] = useState<'fade' | 'slide' | 'none'>('none')
   const newReleasesRequestId = useRef(0)
+  const [futureReleases, setFutureReleases] = useState<MediaItem[]>([])
+  const [futureReleasesLoading, setFutureReleasesLoading] = useState(false)
+  const [futureReleasesError, setFutureReleasesError] = useState<string | null>(null)
+  const [futureReleaseFilter, setFutureReleaseFilter] = useState<ReleaseFilter>('all')
+  const [futureReleasePage, setFutureReleasePage] = useState(0)
+  const [futureReleasesFadeState, setFutureReleasesFadeState] = useState<'visible' | 'fading-out' | 'fading-in'>('visible')
+  const [futureReleaseSlideDirection, setFutureReleaseSlideDirection] = useState<'left' | 'right' | 'none'>('none')
+  const [futureReleaseTransitionType, setFutureReleaseTransitionType] = useState<'fade' | 'slide' | 'none'>('none')
+  const futureReleasesRequestId = useRef(0)
   // Remember-me support: if a profile was stored and flag set, restore it.
   const [currentUser, setCurrentUser] = useState<{user:string;email:string;user_id?:number;display_name?:string;is_admin?:boolean}|null>(() => {
     try {
@@ -263,6 +274,7 @@ export default function App() {
   const [watchlistLoading, setWatchlistLoading] = useState(false)
   const [isFavorite, setIsFavorite] = useState(false)
   const [favoriteLoading, setFavoriteLoading] = useState(false)
+  const [detailDeleting, setDetailDeleting] = useState(false)
   const [userReactions, setUserReactions] = useState<Record<number, string[]>>({}) // review_id -> emote_types[]
   // Cast carousel state
   const CAST_PAGE_SIZE = 6
@@ -864,6 +876,10 @@ export default function App() {
     loadNewReleases()
   }, [newReleaseFilter])
 
+  useEffect(() => {
+    loadFutureReleases()
+  }, [futureReleaseFilter])
+
   // Load carousel data once (always weekly, top 5)
   useEffect(() => {
     let cancelled = false
@@ -964,6 +980,19 @@ export default function App() {
     return newReleases.slice(start, end)
   }, [newReleases, newReleasePage, newReleaseTotalPages])
 
+  const futureReleaseTotalPages = useMemo(() => {
+    if(futureReleases.length === 0) return 0
+    return Math.ceil(futureReleases.length / FUTURE_RELEASE_PAGE_SIZE)
+  }, [futureReleases.length])
+
+  const displayedFutureReleases = useMemo(() => {
+    if(futureReleases.length === 0) return []
+    const clampedPage = Math.min(futureReleasePage, Math.max(0, futureReleaseTotalPages - 1))
+    const start = clampedPage * FUTURE_RELEASE_PAGE_SIZE
+    const end = start + FUTURE_RELEASE_PAGE_SIZE
+    return futureReleases.slice(start, end)
+  }, [futureReleases, futureReleasePage, futureReleaseTotalPages])
+
 
   useEffect(() => {
     if(newReleases.length === 0) {
@@ -977,6 +1006,18 @@ export default function App() {
     }
   }, [newReleases.length, newReleasePage, newReleaseTotalPages])
 
+  useEffect(() => {
+    if(futureReleases.length === 0) {
+      if(futureReleasePage !== 0){
+        setFutureReleasePage(0)
+      }
+      return
+    }
+    if(futureReleasePage > Math.max(0, futureReleaseTotalPages - 1)){
+      setFutureReleasePage(Math.max(0, futureReleaseTotalPages - 1))
+    }
+  }, [futureReleases.length, futureReleasePage, futureReleaseTotalPages])
+
   // Reset slide direction and transition type after animation completes
   useEffect(() => {
     if (newReleaseSlideDirection !== 'none') {
@@ -987,6 +1028,16 @@ export default function App() {
       return () => clearTimeout(timer)
     }
   }, [newReleaseSlideDirection])
+
+  useEffect(() => {
+    if (futureReleaseSlideDirection !== 'none') {
+      const timer = setTimeout(() => {
+        setFutureReleaseSlideDirection('none')
+        setFutureReleaseTransitionType('none')
+      }, 400) // Match animation duration
+      return () => clearTimeout(timer)
+    }
+  }, [futureReleaseSlideDirection])
 
   useEffect(() => {
     if (moviesSlideDirection !== 'none') {
@@ -1135,6 +1186,15 @@ export default function App() {
       return () => clearTimeout(timer)
     }
   }, [newReleasesFadeState, newReleaseTransitionType])
+
+  useEffect(() => {
+    if (futureReleasesFadeState === 'visible' && futureReleaseTransitionType === 'fade') {
+      const timer = setTimeout(() => {
+        setFutureReleaseTransitionType('none')
+      }, 50) // Small delay to ensure animation completes
+      return () => clearTimeout(timer)
+    }
+  }, [futureReleasesFadeState, futureReleaseTransitionType])
 
   useEffect(() => {
     if (tab === 'movies' && movies.length > 0) {
@@ -1548,11 +1608,90 @@ export default function App() {
     }
   }
 
+  async function loadFutureReleases(limit = FUTURE_RELEASE_FETCH_LIMIT, filter: ReleaseFilter = futureReleaseFilter){
+    const requestId = ++futureReleasesRequestId.current
+    const hasExistingContent = futureReleases.length > 0
+    
+    setFutureReleasesLoading(true)
+    setFutureReleasesError(null)
+    
+    // If we have existing content, fade it out first
+    if (hasExistingContent) {
+      setFutureReleaseTransitionType('fade')
+      setFutureReleasesFadeState('fading-out')
+    }
+    
+    try {
+      const items = await getFutureReleases(limit, filter)
+      
+      // Only update if this is still the latest request
+      if (requestId === futureReleasesRequestId.current) {
+        const normalized = items.map(item => {
+          const base: any = { ...item }
+          if(typeof base.id !== 'number' && typeof base.item_id === 'number'){
+            base.id = base.item_id
+          }
+          if(!base.poster_path && base.poster_url){
+            base.poster_path = base.poster_url
+          }
+          if(base.media_type === 'show'){
+            base.media_type = 'tv'
+          }
+          return base as MediaItem
+        })
+        const sorted = normalized
+          .slice()
+          .sort((a, b) => {
+            const aTime = a.release_date ? Date.parse(a.release_date) : 0
+            const bTime = b.release_date ? Date.parse(b.release_date) : 0
+            return aTime - bTime // Ascending for future releases (earliest first)
+          })
+        
+        // Wait for fade-out to complete before updating content
+        const fadeDelay = hasExistingContent ? 200 : 0
+        setTimeout(() => {
+          if (requestId === futureReleasesRequestId.current) {
+            setFutureReleases(sorted)
+            setFutureReleasePage(0)
+            setFutureReleasesLoading(false)
+            setFutureReleasesFadeState('fading-in')
+            // After fade-in completes, set to visible
+            setTimeout(() => {
+              if (requestId === futureReleasesRequestId.current) {
+                setFutureReleasesFadeState('visible')
+              }
+            }, 300)
+          }
+        }, fadeDelay)
+      }
+    } catch (err) {
+      console.error('Failed to load future releases', err)
+      
+      // Only update if this is still the latest request
+      if (requestId === futureReleasesRequestId.current) {
+        const fadeDelay = hasExistingContent ? 200 : 0
+        setTimeout(() => {
+          if (requestId === futureReleasesRequestId.current) {
+            setFutureReleases([])
+            setFutureReleasesError('Unable to load future releases at the moment.')
+            setFutureReleasesLoading(false)
+            setFutureReleasesFadeState('fading-in')
+            setTimeout(() => {
+              if (requestId === futureReleasesRequestId.current) {
+                setFutureReleasesFadeState('visible')
+              }
+            }, 300)
+          }
+        }, fadeDelay)
+      }
+    }
+  }
+
   async function onRefresh(){
     setBusy(true)
     try{
       await refresh(1)
-      await Promise.all([load(), loadNewReleases(undefined, newReleaseFilter)])
+      await Promise.all([load(), loadNewReleases(undefined, newReleaseFilter), loadFutureReleases(undefined, futureReleaseFilter)])
     } finally {
       setBusy(false)
     }
@@ -1902,6 +2041,11 @@ export default function App() {
       setIsInWatchlist(false)
     }
   }, [detailData, currentUser, profileData])
+
+  // Reset delete state when viewing a new item
+  useEffect(() => {
+    setDetailDeleting(false)
+  }, [detailData?.movie_id, detailData?.show_id])
 
   // Check favorite status when detail data or current user changes
   useEffect(() => {
@@ -2544,7 +2688,9 @@ export default function App() {
                               media_type: 'movie',
                               title: fav.title,
                               poster_path: fav.poster_path || undefined,
-                              vote_average: fav.rating || undefined
+                              vote_average: fav.vote_average,
+                              original_language: fav.original_language,
+                              release_date: fav.release_date,
                             } as MediaItem}
                             onClick={() => {
                               if(fav.id) {
@@ -2623,7 +2769,9 @@ export default function App() {
                               media_type: 'tv',
                               title: fav.title,
                               poster_path: fav.poster_path || undefined,
-                              vote_average: fav.rating || undefined
+                              vote_average: fav.vote_average,
+                              original_language: fav.original_language,
+                              release_date: fav.release_date,
                             } as MediaItem}
                             onClick={() => {
                               if(fav.id) {
@@ -2672,7 +2820,7 @@ export default function App() {
                   Recent Reviews
                 </h2>
                 <div style={{display:'flex', flexDirection:'column', gap:'16px'}}>
-                  {viewingUserProfile.recent_reviews.map((review, idx) => (
+                  {viewingUserProfile.recent_reviews.slice(0, 3).map((review, idx) => (
                     <div
                       key={`review-${review.review_id}-${idx}`}
                       style={{
@@ -2889,6 +3037,9 @@ export default function App() {
                               media_type: 'movie',
                               title: item.title,
                               poster_path: item.poster_path || undefined,
+                              vote_average: item.vote_average,
+                              original_language: item.original_language,
+                              release_date: item.release_date,
                             } as MediaItem}
                             onClick={() => {
                               if(item.id) {
@@ -3025,6 +3176,9 @@ export default function App() {
                               media_type: 'tv',
                               title: item.title,
                               poster_path: item.poster_path || undefined,
+                              vote_average: item.vote_average,
+                              original_language: item.original_language,
+                              release_date: item.release_date,
                             } as MediaItem}
                             onClick={() => {
                               if(item.id) {
@@ -3329,7 +3483,9 @@ export default function App() {
                             media_type: 'movie',
                             title: fav.title,
                             poster_path: fav.poster_path || undefined,
-                            vote_average: fav.rating || undefined
+                            vote_average: fav.vote_average,
+                            original_language: fav.original_language,
+                            release_date: fav.release_date,
                           } as MediaItem}
                           onClick={() => {
                             if(fav.id) {
@@ -3411,7 +3567,9 @@ export default function App() {
                             media_type: 'tv',
                             title: fav.title,
                             poster_path: fav.poster_path || undefined,
-                            vote_average: fav.rating || undefined
+                            vote_average: fav.vote_average,
+                            original_language: fav.original_language,
+                            release_date: fav.release_date,
                           } as MediaItem}
                           onClick={() => {
                             if(fav.id) {
@@ -3461,7 +3619,7 @@ export default function App() {
               Recent Reviews
             </h2>
             <div style={{display:'flex', flexDirection:'column', gap:'16px'}}>
-              {profileData.recent_reviews.map((review, idx) => (
+              {profileData.recent_reviews.slice(0, 3).map((review, idx) => (
                 <div
                   key={`my-review-${review.review_id}-${idx}`}
                   style={{
@@ -3678,6 +3836,9 @@ export default function App() {
                           media_type: 'movie',
                           title: item.title,
                           poster_path: item.poster_path || undefined,
+                          vote_average: item.vote_average,
+                          original_language: item.original_language,
+                          release_date: item.release_date,
                         } as MediaItem}
                         onClick={() => {
                           if(item.id) {
@@ -3814,6 +3975,9 @@ export default function App() {
                           media_type: 'tv',
                           title: item.title,
                           poster_path: item.poster_path || undefined,
+                          vote_average: item.vote_average,
+                          original_language: item.original_language,
+                          release_date: item.release_date,
                         } as MediaItem}
                         onClick={() => {
                           if(item.id) {
@@ -5172,103 +5336,167 @@ export default function App() {
                           </>
                         )}
                         {currentUser?.is_admin && (
-                          <button
-                            type="button"
-                            className={`detail-edit-button ${detailEditMode ? 'detail-edit-button-active' : ''}`}
-                            onClick={async () => {
-                              if(detailEditMode) {
-                                // Save changes
-                                if(!detailData) return
-                                setEditSaving(true)
-                                try {
-                                  const payload: UpdateMediaPayload = {
-                                    title: editTitle || undefined,
-                                    overview: editOverview || undefined,
-                                    language: editLanguage || undefined,
-                                    tmdb_score: editTmdbScore ? parseFloat(editTmdbScore) : undefined,
-                                    popularity: editPopularity ? parseFloat(editPopularity) : undefined,
-                                    genre: editGenre || undefined,
+                          <>
+                            <button
+                              type="button"
+                              className={`detail-edit-button ${detailEditMode ? 'detail-edit-button-active' : ''}`}
+                              onClick={async () => {
+                                if(detailEditMode) {
+                                  // Save changes
+                                  if(!detailData) return
+                                  setEditSaving(true)
+                                  try {
+                                    const payload: UpdateMediaPayload = {
+                                      title: editTitle || undefined,
+                                      overview: editOverview || undefined,
+                                      language: editLanguage || undefined,
+                                      tmdb_score: editTmdbScore ? parseFloat(editTmdbScore) : undefined,
+                                      popularity: editPopularity ? parseFloat(editPopularity) : undefined,
+                                      genre: editGenre || undefined,
+                                    }
+                                    
+                                    if(detailData.media_type === 'movie') {
+                                      const movieDetail = detailData as MovieDetail
+                                      if(editYear) {
+                                        payload.release_year = parseInt(editYear)
+                                      }
+                                      const result = await updateMedia('movie', movieDetail.movie_id, payload)
+                                      if(!result.ok) {
+                                        alert(`Failed to update: ${result.error}`)
+                                        return
+                                      }
+                                    } else {
+                                      const showDetail = detailData as ShowDetail
+                                      if(editYear) {
+                                        payload.first_air_year = parseInt(editYear)
+                                      }
+                                      const result = await updateMedia('tv', showDetail.show_id, payload)
+                                      if(!result.ok) {
+                                        alert(`Failed to update: ${result.error}`)
+                                        return
+                                      }
+                                    }
+                                    
+                                    // Reload detail data
+                                    const mediaType = detailData.media_type
+                                    const id = mediaType === 'movie' ? (detailData as MovieDetail).movie_id : (detailData as ShowDetail).show_id
+                                    if(mediaType === 'movie') {
+                                      const data = await getMovieDetail(id)
+                                      setDetailData({ ...data, media_type: 'movie' })
+                                      setEditTitle(data.title || '')
+                                      setEditOverview(data.overview || '')
+                                      setEditLanguage(data.original_language || '')
+                                      setEditYear(data.release_year?.toString() || '')
+                                      setEditTmdbScore(data.vote_average?.toString() || '')
+                                      setEditPopularity(data.popularity?.toString() || '')
+                                      // Join all genres with comma and space
+                                      setEditGenre(data.genres?.join(', ') || '')
+                                    } else {
+                                      const data = await getShowDetail(id)
+                                      setDetailData({ ...data, media_type: 'tv' })
+                                      setEditTitle(data.title || '')
+                                      setEditOverview(data.overview || '')
+                                      setEditLanguage(data.original_language || '')
+                                      const yearMatch = data.first_air_date?.match(/^(\d{4})/)
+                                      setEditYear(yearMatch ? yearMatch[1] : '')
+                                      setEditTmdbScore(data.vote_average?.toString() || '')
+                                      setEditPopularity(data.popularity?.toString() || '')
+                                      // Join all genres with comma and space
+                                      setEditGenre(data.genres?.join(', ') || '')
+                                    }
+                                    setDetailEditMode(false)
+                                  } catch (err: any) {
+                                    alert(`Error updating: ${err?.message || 'Unknown error'}`)
+                                  } finally {
+                                    setEditSaving(false)
                                   }
-                                  
+                                } else {
+                                  // Enter edit mode - initialize fields from current data
+                                  setEditTitle(detailData.title || '')
+                                  setEditOverview(detailData.overview || '')
+                                  setEditLanguage(detailData.original_language || '')
                                   if(detailData.media_type === 'movie') {
                                     const movieDetail = detailData as MovieDetail
-                                    if(editYear) {
-                                      payload.release_year = parseInt(editYear)
-                                    }
-                                    const result = await updateMedia('movie', movieDetail.movie_id, payload)
-                                    if(!result.ok) {
-                                      alert(`Failed to update: ${result.error}`)
-                                      return
-                                    }
+                                    setEditYear(movieDetail.release_year?.toString() || '')
                                   } else {
                                     const showDetail = detailData as ShowDetail
-                                    if(editYear) {
-                                      payload.first_air_year = parseInt(editYear)
-                                    }
-                                    const result = await updateMedia('tv', showDetail.show_id, payload)
-                                    if(!result.ok) {
-                                      alert(`Failed to update: ${result.error}`)
-                                      return
-                                    }
-                                  }
-                                  
-                                  // Reload detail data
-                                  const mediaType = detailData.media_type
-                                  const id = mediaType === 'movie' ? (detailData as MovieDetail).movie_id : (detailData as ShowDetail).show_id
-                                  if(mediaType === 'movie') {
-                                    const data = await getMovieDetail(id)
-                                    setDetailData({ ...data, media_type: 'movie' })
-                                    setEditTitle(data.title || '')
-                                    setEditOverview(data.overview || '')
-                                    setEditLanguage(data.original_language || '')
-                                    setEditYear(data.release_year?.toString() || '')
-                                    setEditTmdbScore(data.vote_average?.toString() || '')
-                                    setEditPopularity(data.popularity?.toString() || '')
-                                    // Join all genres with comma and space
-                                    setEditGenre(data.genres?.join(', ') || '')
-                                  } else {
-                                    const data = await getShowDetail(id)
-                                    setDetailData({ ...data, media_type: 'tv' })
-                                    setEditTitle(data.title || '')
-                                    setEditOverview(data.overview || '')
-                                    setEditLanguage(data.original_language || '')
-                                    const yearMatch = data.first_air_date?.match(/^(\d{4})/)
+                                    const yearMatch = showDetail.first_air_date?.match(/^(\d{4})/)
                                     setEditYear(yearMatch ? yearMatch[1] : '')
-                                    setEditTmdbScore(data.vote_average?.toString() || '')
-                                    setEditPopularity(data.popularity?.toString() || '')
-                                    // Join all genres with comma and space
-                                    setEditGenre(data.genres?.join(', ') || '')
                                   }
-                                  setDetailEditMode(false)
+                                  setEditTmdbScore(detailData.vote_average?.toString() || '')
+                                  setEditPopularity(detailData.popularity?.toString() || '')
+                                  // Join all genres with comma and space
+                                  setEditGenre(detailData.genres?.join(', ') || '')
+                                  setDetailEditMode(true)
+                                }
+                              }}
+                              disabled={editSaving || detailLoading}
+                            >
+                              {detailEditMode ? (editSaving ? 'Saving...' : 'Save') : 'Edit'}
+                            </button>
+                            <button
+                              type="button"
+                              className="detail-delete-button"
+                              onClick={async () => {
+                                if(!detailData || detailDeleting) return
+                                
+                                const mediaType = detailData.media_type
+                                const mediaTitle = detailData.title
+                                const id = mediaType === 'movie' 
+                                  ? (detailData as MovieDetail).movie_id 
+                                  : (detailData as ShowDetail).show_id
+                                
+                                if(!confirm(`Are you sure you want to delete "${mediaTitle}"? This action cannot be undone.`)) {
+                                  return
+                                }
+                                
+                                setDetailDeleting(true)
+                                try {
+                                  const result = await deleteMedia(mediaType, id)
+                                  if(result.ok) {
+                                    // Reset state before navigation to prevent stuck state
+                                    setDetailDeleting(false)
+                                    // Navigate to home after successful deletion
+                                    navigateToTab('home')
+                                  } else {
+                                    alert(`Failed to delete: ${result.error || 'Unknown error'}`)
+                                    setDetailDeleting(false)
+                                  }
                                 } catch (err: any) {
-                                  alert(`Error updating: ${err?.message || 'Unknown error'}`)
-                                } finally {
-                                  setEditSaving(false)
+                                  alert(`Error deleting: ${err?.message || 'Unknown error'}`)
+                                  setDetailDeleting(false)
                                 }
-                              } else {
-                                // Enter edit mode - initialize fields from current data
-                                setEditTitle(detailData.title || '')
-                                setEditOverview(detailData.overview || '')
-                                setEditLanguage(detailData.original_language || '')
-                                if(detailData.media_type === 'movie') {
-                                  const movieDetail = detailData as MovieDetail
-                                  setEditYear(movieDetail.release_year?.toString() || '')
-                                } else {
-                                  const showDetail = detailData as ShowDetail
-                                  const yearMatch = showDetail.first_air_date?.match(/^(\d{4})/)
-                                  setEditYear(yearMatch ? yearMatch[1] : '')
+                              }}
+                              disabled={detailDeleting || detailLoading}
+                              style={{
+                                padding:'10px 20px',
+                                borderRadius:'8px',
+                                border:'1px solid rgba(239, 68, 68, 0.4)',
+                                background:'rgba(239, 68, 68, 0.15)',
+                                color:'#ffffff',
+                                cursor: detailDeleting || detailLoading ? 'not-allowed' : 'pointer',
+                                fontWeight:600,
+                                fontSize:'14px',
+                                transition:'all 0.2s ease',
+                                opacity: detailDeleting || detailLoading ? 0.6 : 1,
+                                boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3), 0 0 0 1px rgba(239, 68, 68, 0.2)',
+                                backdropFilter: 'blur(8px)',
+                                WebkitBackdropFilter: 'blur(8px)'
+                              }}
+                              onMouseEnter={(e) => {
+                                if (!detailDeleting && !detailLoading) {
+                                  e.currentTarget.style.background = 'rgba(239, 68, 68, 0.25)'
+                                  e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.6)'
                                 }
-                                setEditTmdbScore(detailData.vote_average?.toString() || '')
-                                setEditPopularity(detailData.popularity?.toString() || '')
-                                // Join all genres with comma and space
-                                setEditGenre(detailData.genres?.join(', ') || '')
-                                setDetailEditMode(true)
-                              }
-                            }}
-                            disabled={editSaving || detailLoading}
-                          >
-                            {detailEditMode ? (editSaving ? 'Saving...' : 'Save') : 'Edit'}
-                          </button>
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.15)'
+                                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)'
+                              }}
+                            >
+                              {detailDeleting ? 'Deleting...' : 'Delete'}
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -6395,6 +6623,93 @@ export default function App() {
                         setNewReleasePage(prev => Math.min(newReleaseTotalPages - 1, prev + 1))
                       }}
                       disabled={newReleasesLoading || newReleasePage >= newReleaseTotalPages - 1}
+                    >
+                      Next ›
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <div className="new-release-section">
+            <div className="new-release-header">
+              <div>
+                <h3>Future Releases</h3>
+                <p>Upcoming titles to look forward to.</p>
+              </div>
+              <div className="new-release-actions">
+                <div className="new-release-tabs">
+                  {(['all', 'movie', 'tv'] as ReleaseFilter[]).map(option => (
+                    <button
+                      key={option}
+                      type="button"
+                      className={option === futureReleaseFilter ? 'active' : ''}
+                      onClick={() => { setFutureReleaseFilter(option); setFutureReleasePage(0) }}
+                      disabled={futureReleasesLoading && option === futureReleaseFilter}
+                    >
+                      {option === 'all' ? 'All' : option === 'movie' ? 'Movies' : 'TV Shows'}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="btn-text"
+                  onClick={() => loadFutureReleases(FUTURE_RELEASE_FETCH_LIMIT, futureReleaseFilter)}
+                  disabled={futureReleasesLoading}
+                >
+                  {futureReleasesLoading ? 'Refreshing…' : 'Refresh list'}
+                </button>
+              </div>
+            </div>
+
+            {futureReleasesLoading && futureReleases.length === 0 && (
+              <div className="new-release-empty">Loading future releases…</div>
+            )}
+            {!futureReleasesLoading && futureReleasesError && (
+              <div className="new-release-empty">{futureReleasesError}</div>
+            )}
+            {!futureReleasesLoading &&
+              !futureReleasesError &&
+              futureReleases.length === 0 && (
+                <div className="new-release-empty">
+                  No future releases found. Try running the ETL loader.
+                </div>
+              )}
+            {futureReleases.length > 0 && (
+              <>
+                <div className={`new-release-grid-wrapper ${futureReleaseTransitionType === 'fade' ? `new-release-grid-wrapper-${futureReleasesFadeState}` : ''}`}>
+                  <div className={`new-release-grid ${futureReleaseTransitionType === 'slide' ? `new-release-grid-slide-${futureReleaseSlideDirection}` : ''}`}>
+                    {displayedFutureReleases.map(item => (
+                      <Card 
+                        key={`fr-${item.media_type}-${item.tmdb_id}`} 
+                        item={item} 
+                        onClick={() => navigateToDetail(item.media_type, item.id!)}
+                      />
+                    ))}
+                  </div>
+                </div>
+                {futureReleaseTotalPages > 1 && (
+                  <div className="pagination-controls" aria-label="Future releases pagination">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFutureReleaseTransitionType('slide')
+                        setFutureReleaseSlideDirection('right')
+                        setFutureReleasePage(prev => Math.max(0, prev - 1))
+                      }}
+                      disabled={futureReleasesLoading || futureReleasePage === 0}
+                    >
+                      ‹ Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFutureReleaseTransitionType('slide')
+                        setFutureReleaseSlideDirection('left')
+                        setFutureReleasePage(prev => Math.min(futureReleaseTotalPages - 1, prev + 1))
+                      }}
+                      disabled={futureReleasesLoading || futureReleasePage >= futureReleaseTotalPages - 1}
                     >
                       Next ›
                     </button>

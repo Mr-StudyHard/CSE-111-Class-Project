@@ -73,9 +73,12 @@ class TMDbETLService:
     
     def _get_db_connection(self) -> sqlite3.Connection:
         """Get a database connection"""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        
+        # Set busy timeout to handle concurrent access (30 seconds)
+        conn.execute("PRAGMA busy_timeout = 30000")
         
         # Enable WAL mode if configured
         if self.config.get('database', {}).get('enable_wal', True):
@@ -129,6 +132,8 @@ class TMDbETLService:
                 conn.execute("ALTER TABLE movies ADD COLUMN backdrop_path TEXT")
             if not has_column('movies', 'original_language'):
                 conn.execute("ALTER TABLE movies ADD COLUMN original_language TEXT")
+            if not has_column('movies', 'release_date'):
+                conn.execute("ALTER TABLE movies ADD COLUMN release_date TEXT")
             
             # Shows table columns
             if not has_column('shows', 'backdrop_path'):
@@ -231,19 +236,22 @@ class TMDbETLService:
     
     def _transform_movie_data(self, data: dict) -> dict:
         """Transform and clean movie data"""
-        # Extract year from release date
+        # Extract year and full date from release date
         release_year = None
-        release_date = data.get('release_date')
-        if release_date and len(release_date) >= 4:
+        release_date_full = data.get('release_date')
+        if release_date_full and len(release_date_full) >= 4:
             try:
-                release_year = int(release_date[:4])
+                release_year = int(release_date_full[:4])
             except (ValueError, TypeError):
                 release_year = None
+        # Store full date if available (YYYY-MM-DD format, at least 10 chars)
+        release_date = release_date_full if release_date_full and len(release_date_full) >= 10 else None
         
         return {
             'tmdb_id': data.get('id'),
             'title': self._clean_text(data.get('title')),
             'release_year': release_year,
+            'release_date': release_date,
             'runtime_min': data.get('runtime'),
             'overview': self._clean_text(data.get('overview')),
             'poster_path': data.get('poster_path'),
@@ -302,6 +310,7 @@ class TMDbETLService:
             movie_data['tmdb_id'],
             movie_data['title'],
             movie_data['release_year'],
+            movie_data.get('release_date'),
             movie_data['runtime_min'],
             movie_data['overview'],
             movie_data['poster_path'],
@@ -314,12 +323,13 @@ class TMDbETLService:
         cursor = conn.execute(
             """
             INSERT INTO movies (
-                tmdb_id, title, release_year, runtime_min, overview, poster_path,
+                tmdb_id, title, release_year, release_date, runtime_min, overview, poster_path,
                 backdrop_path, original_language, tmdb_vote_avg, popularity
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(tmdb_id) DO UPDATE SET
                 title = excluded.title,
                 release_year = excluded.release_year,
+                release_date = excluded.release_date,
                 runtime_min = excluded.runtime_min,
                 overview = excluded.overview,
                 poster_path = excluded.poster_path,
@@ -614,6 +624,21 @@ class TMDbETLService:
                 # Transform data
                 movie_data = self._transform_movie_data(detail)
                 
+                # Fetch all person details BEFORE entering transaction (to avoid long-running locks)
+                credits = detail.get('credits', {}).get('cast', [])
+                person_details_map = {}
+                for cast in credits[:max_cast]:
+                    # Fetch person details OUTSIDE transaction
+                    person_details = self._fetch_person_details(cast.get('id'))
+                    # Merge cast info with person details
+                    person_details.update({
+                        'id': cast.get('id'),
+                        'name': cast.get('name'),
+                        'profile_path': cast.get('profile_path'),
+                    })
+                    person_details_map[cast.get('id')] = person_details
+                
+                # Now do all database operations in a quick transaction
                 with conn:
                     # Upsert movie
                     self._upsert_movie(conn, movie_data)
@@ -621,19 +646,12 @@ class TMDbETLService:
                     # Link genres
                     self._link_movie_genres(conn, movie_id, detail.get('genres', []))
                     
-                    # Process cast
-                    credits = detail.get('credits', {}).get('cast', [])
+                    # Process cast (using pre-fetched person details)
                     for cast in credits[:max_cast]:
-                        # Fetch full person details from TMDb
-                        person_details = self._fetch_person_details(cast.get('id'))
-                        # Merge cast info with person details
-                        person_details.update({
-                            'id': cast.get('id'),
-                            'name': cast.get('name'),
-                            'profile_path': cast.get('profile_path'),
-                        })
-                        self._upsert_person(conn, person_details)
-                        self._attach_movie_cast(conn, movie_id, cast)
+                        person_details = person_details_map.get(cast.get('id'))
+                        if person_details:
+                            self._upsert_person(conn, person_details)
+                            self._attach_movie_cast(conn, movie_id, cast)
                 
                 if self.stats['movies_processed'] % 10 == 0:
                     self.logger.info(f"Processed {self.stats['movies_processed']} movies...")
@@ -677,6 +695,37 @@ class TMDbETLService:
                 # Transform data
                 show_data = self._transform_show_data(detail)
                 
+                # Fetch all person details BEFORE entering transaction
+                credits = detail.get('aggregate_credits', {}).get('cast', [])
+                person_details_map = {}
+                for cast in credits[:max_cast]:
+                    # Fetch person details OUTSIDE transaction
+                    person_details = self._fetch_person_details(cast.get('id'))
+                    # Merge cast info with person details
+                    person_details.update({
+                        'id': cast.get('id'),
+                        'name': cast.get('name'),
+                        'profile_path': cast.get('profile_path'),
+                    })
+                    person_details_map[cast.get('id')] = person_details
+                
+                # Fetch all season details BEFORE entering transaction
+                seasons = detail.get('seasons', [])
+                season_details_map = {}
+                for season in seasons:
+                    season_number = season.get('season_number')
+                    if season_number in (None, 0):
+                        continue  # Skip specials
+                    try:
+                        # Fetch season details OUTSIDE transaction
+                        season_detail = self._api_get(f'/tv/{show_id}/season/{season_number}')
+                        season_details_map[season_number] = season_detail
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Error fetching season {season_number} of show {show_id}: {e}"
+                        )
+                
+                # Now do all database operations in a quick transaction
                 with conn:
                     # Upsert show
                     self._upsert_show(conn, show_data)
@@ -684,22 +733,14 @@ class TMDbETLService:
                     # Link genres
                     self._link_show_genres(conn, show_id, detail.get('genres', []))
                     
-                    # Process cast
-                    credits = detail.get('aggregate_credits', {}).get('cast', [])
+                    # Process cast (using pre-fetched person details)
                     for cast in credits[:max_cast]:
-                        # Fetch full person details from TMDb
-                        person_details = self._fetch_person_details(cast.get('id'))
-                        # Merge cast info with person details
-                        person_details.update({
-                            'id': cast.get('id'),
-                            'name': cast.get('name'),
-                            'profile_path': cast.get('profile_path'),
-                        })
-                        self._upsert_person(conn, person_details)
-                        self._attach_show_cast(conn, show_id, cast)
+                        person_details = person_details_map.get(cast.get('id'))
+                        if person_details:
+                            self._upsert_person(conn, person_details)
+                            self._attach_show_cast(conn, show_id, cast)
                     
-                    # Process seasons and episodes
-                    seasons = detail.get('seasons', [])
+                    # Process seasons and episodes (using pre-fetched season details)
                     for season in seasons:
                         season_number = season.get('season_number')
                         if season_number in (None, 0):
@@ -707,18 +748,12 @@ class TMDbETLService:
                         
                         self._upsert_season(conn, show_id, season)
                         
-                        # Fetch season details for episodes
-                        try:
-                            season_detail = self._api_get(f'/tv/{show_id}/season/{season_number}')
+                        # Use pre-fetched season details
+                        season_detail = season_details_map.get(season_number)
+                        if season_detail:
                             episodes = season_detail.get('episodes', [])[:episodes_per_season]
-                            
                             for episode in episodes:
                                 self._upsert_episode(conn, show_id, season_number, episode)
-                        
-                        except Exception as e:
-                            self.logger.warning(
-                                f"Error processing season {season_number} of show {show_id}: {e}"
-                            )
                 
                 if self.stats['shows_processed'] % 10 == 0:
                     self.logger.info(f"Processed {self.stats['shows_processed']} shows...")
@@ -768,7 +803,8 @@ class TMDbETLService:
         self.logger.info("Running VACUUM to optimize database...")
         
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            conn.execute("PRAGMA busy_timeout = 30000")
             conn.execute("VACUUM")
             conn.close()
             self.logger.info("Database optimization complete")

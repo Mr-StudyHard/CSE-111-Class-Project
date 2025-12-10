@@ -11,9 +11,10 @@ def get_db() -> sqlite3.Connection:
     """Return a SQLite connection stored on Flask's `g` context."""
     if "sqlite_conn" not in g:
         path = os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
-        conn = sqlite3.connect(path)
+        conn = sqlite3.connect(path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 30000")  # 30 second timeout for locks
         g.sqlite_conn = conn
     return g.sqlite_conn
 

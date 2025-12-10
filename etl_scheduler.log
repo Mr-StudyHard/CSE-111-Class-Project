@@ -35,3 +35,54 @@
 2025-12-03 21:14:51,351 - ETLScheduler - INFO - ================================================================================
 
 2025-12-03 21:17:17,560 - ETLScheduler - INFO - ETL Scheduler initialized
+2025-12-10 01:32:48,412 - ETLScheduler - INFO - ETL Scheduler initialized
+2025-12-10 01:32:48,413 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:32:48,413 - ETLScheduler - INFO - Starting ETL job: RUN-1-20251210-013248
+2025-12-10 01:32:48,414 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:34:25,883 - ETLScheduler - INFO - ETL Scheduler initialized
+2025-12-10 01:34:25,899 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:34:25,900 - ETLScheduler - INFO - Starting ETL job: RUN-1-20251210-013425
+2025-12-10 01:34:25,900 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:35:46,067 - ETLScheduler - INFO - ETL Scheduler initialized
+2025-12-10 01:35:46,067 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:35:46,067 - ETLScheduler - INFO - Starting ETL job: RUN-1-20251210-013546
+2025-12-10 01:35:46,067 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:39:17,047 - ETLScheduler - INFO - ETL job RUN-1-20251210-013248 completed successfully
+2025-12-10 01:39:17,049 - ETLScheduler - INFO - Execution time: 388.63 seconds
+2025-12-10 01:39:17,049 - ETLScheduler - INFO - Statistics: {'movies_processed': 20, 'movies_inserted': 1, 'movies_updated': 15, 'movies_skipped': 1, 'shows_processed': 20, 'shows_inserted': 0, 'shows_updated': 12, 'shows_skipped': 1, 'genres_synced': 27, 'people_synced': 650, 'api_calls': 847, 'errors': 10, 'execution_time': '388.62s'}
+2025-12-10 01:39:17,059 - ETLScheduler - INFO - Running KPI precomputation...
+2025-12-10 01:39:17,148 - ETLScheduler - INFO - KPI computation completed: {'kpis_computed': 22, 'execution_time': '0.09s', 'errors': 0}
+2025-12-10 01:39:17,148 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:39:17,148 - ETLScheduler - INFO - ETL job RUN-1-20251210-013248 finished
+2025-12-10 01:39:17,148 - ETLScheduler - INFO - ================================================================================
+
+2025-12-10 01:42:36,128 - ETLScheduler - INFO - ETL Scheduler initialized
+2025-12-10 01:42:36,130 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:42:36,130 - ETLScheduler - INFO - Starting ETL job: RUN-1-20251210-014236
+2025-12-10 01:42:36,131 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:45:58,830 - ETLScheduler - INFO - ETL Scheduler initialized
+2025-12-10 01:45:58,830 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:45:58,831 - ETLScheduler - INFO - Starting ETL job: RUN-1-20251210-014558
+2025-12-10 01:45:58,831 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:47:23,113 - ETLScheduler - INFO - ETL job RUN-1-20251210-014558 completed successfully
+2025-12-10 01:47:23,113 - ETLScheduler - INFO - Execution time: 84.28 seconds
+2025-12-10 01:47:23,113 - ETLScheduler - INFO - Statistics: {'movies_processed': 6, 'movies_inserted': 0, 'movies_updated': 6, 'movies_skipped': 0, 'shows_processed': 6, 'shows_inserted': 0, 'shows_updated': 5, 'shows_skipped': 1, 'genres_synced': 27, 'people_synced': 257, 'api_calls': 317, 'errors': 0, 'execution_time': '84.28s'}
+2025-12-10 01:47:23,113 - ETLScheduler - INFO - Running KPI precomputation...
+2025-12-10 01:47:23,216 - ETLScheduler - INFO - KPI computation completed: {'kpis_computed': 22, 'execution_time': '0.10s', 'errors': 0}
+2025-12-10 01:47:23,216 - ETLScheduler - INFO - ================================================================================
+2025-12-10 01:47:23,216 - ETLScheduler - INFO - ETL job RUN-1-20251210-014558 finished
+2025-12-10 01:47:23,216 - ETLScheduler - INFO - ================================================================================
+
+2025-12-10 02:05:56,651 - ETLScheduler - INFO - ETL Scheduler initialized
+2025-12-10 02:05:56,666 - ETLScheduler - INFO - ================================================================================
+2025-12-10 02:05:56,666 - ETLScheduler - INFO - Starting ETL job: RUN-1-20251210-020556
+2025-12-10 02:05:56,666 - ETLScheduler - INFO - ================================================================================
+2025-12-10 02:33:24,776 - ETLScheduler - INFO - ETL job RUN-1-20251210-020556 completed successfully
+2025-12-10 02:33:24,776 - ETLScheduler - INFO - Execution time: 1648.11 seconds
+2025-12-10 02:33:24,776 - ETLScheduler - INFO - Statistics: {'movies_processed': 100, 'movies_inserted': 7, 'movies_updated': 78, 'movies_skipped': 15, 'shows_processed': 100, 'shows_inserted': 4, 'shows_updated': 93, 'shows_skipped': 3, 'genres_synced': 27, 'people_synced': 4103, 'api_calls': 4794, 'errors': 0, 'execution_time': '1648.10s'}
+2025-12-10 02:33:24,779 - ETLScheduler - INFO - Running KPI precomputation...
+2025-12-10 02:33:24,883 - ETLScheduler - INFO - KPI computation completed: {'kpis_computed': 22, 'execution_time': '0.10s', 'errors': 0}
+2025-12-10 02:33:24,883 - ETLScheduler - INFO - ================================================================================
+2025-12-10 02:33:24,883 - ETLScheduler - INFO - ETL job RUN-1-20251210-020556 finished
+2025-12-10 02:33:24,883 - ETLScheduler - INFO - ================================================================================
+

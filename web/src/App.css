@@ -3616,14 +3616,29 @@ button:focus {
   flex-wrap: wrap;
   gap: 12px;
 }
+.new-release-header > div:first-child {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
 .new-release-header h3 {
   margin: 0;
+  padding: 0;
   font-size: 20px;
+  text-indent: 0;
+  display: block;
+  width: 100%;
 }
 .new-release-header p {
   margin: 4px 0 0;
+  padding: 0;
   font-size: 13px;
   color: var(--muted);
+  text-indent: 0;
+  display: block;
+  width: 100%;
 }
 .new-release-grid-wrapper {
   position: relative;
@@ -3730,12 +3745,12 @@ button:focus {
 
 .list-filters-wrapper {
   display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 10px;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 24px;
-  padding: 16px 20px;
+  padding: 14px 18px;
   background: linear-gradient(135deg, rgba(20, 20, 28, 0.6), rgba(17, 17, 23, 0.6));
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 16px;
@@ -3745,10 +3760,11 @@ button:focus {
 
 .filter-select-group {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  gap: 8px;
+  flex: 1 1 0;
   min-width: 0;
+  max-width: calc(100% - 400px);
 }
 
 .filter-pagination {
@@ -3761,16 +3777,18 @@ button:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 8px 16px;
+  padding: 7px 14px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.06);
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
-  min-width: 90px;
+  min-width: 80px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .filter-pagination-button:hover:not(:disabled) {
@@ -3787,18 +3805,19 @@ button:focus {
 .admin-controls-wrapper {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: 4px;
+  padding: 2px 6px;
   background: rgba(147, 51, 234, 0.08);
   border: 1px solid rgba(147, 51, 234, 0.2);
-  border-radius: 10px;
-  margin-right: 12px;
+  border-radius: 8px;
+  margin-right: 8px;
+  flex-shrink: 0;
 }
 
 .admin-controls-wrapper::before {
   content: '⚙️';
-  font-size: 12px;
-  margin-right: 4px;
+  font-size: 11px;
+  margin-right: 3px;
   opacity: 0.7;
 }
 
@@ -3807,21 +3826,22 @@ button:focus {
   background: linear-gradient(135deg, rgba(229, 9, 20, 0.12), rgba(141, 8, 12, 0.08));
   border: 1px solid rgba(229, 9, 20, 0.4);
   color: var(--text);
-  padding: 11px 40px 11px 18px;
+  padding: 10px 36px 10px 16px;
   border-radius: 999px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.25s ease;
   outline: none;
-  min-width: 160px;
+  min-width: 120px;
+  flex: 0 0 auto;
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
   background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='rgba(229, 231, 235, 0.7)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
   background-repeat: no-repeat;
-  background-position: right 14px center;
-  background-size: 18px;
+  background-position: right 12px center;
+  background-size: 16px;
 }
 
 .filter-select:hover:not(:disabled) {
@@ -3856,17 +3876,19 @@ button:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 11px 22px;
+  padding: 10px 16px;
   border-radius: 999px;
   border: 1px solid rgba(229, 9, 20, 0.45);
   background: linear-gradient(135deg, rgba(229, 9, 20, 0.18), rgba(141, 8, 12, 0.14));
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.04em;
   cursor: pointer;
   transition: all 0.25s ease;
   box-shadow: 0 4px 14px rgba(229, 9, 20, 0.18);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .filter-apply-button:hover:not(:disabled) {
@@ -3923,15 +3945,34 @@ button:focus {
   }
 }
 
+@media (max-width: 1400px) {
+  .filter-select-group {
+    max-width: calc(100% - 380px);
+  }
+}
+
+@media (max-width: 1200px) {
+  .list-filters-wrapper {
+    flex-wrap: wrap;
+  }
+  
+  .filter-select-group {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+}
+
 @media (max-width: 768px) {
   .list-filters-wrapper {
     padding: 14px 16px;
     gap: 10px;
+    flex-wrap: wrap;
   }
 
   .filter-select-group {
     flex: 1 1 100%;
     gap: 10px;
+    flex-wrap: wrap;
   }
 
   .filter-pagination {
@@ -4140,15 +4181,16 @@ button:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 12px;
+  padding: 5px 10px;
   border-radius: 6px;
   border: 1px solid rgba(147, 51, 234, 0.3);
   background: rgba(147, 51, 234, 0.1);
   color: rgba(255, 255, 255, 0.9);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .filter-action-button:hover:not(:disabled) {
@@ -4171,15 +4213,16 @@ button:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 12px;
+  padding: 5px 10px;
   border-radius: 6px;
   border: 1px solid rgba(34, 197, 94, 0.3);
   background: rgba(34, 197, 94, 0.1);
   color: rgba(255, 255, 255, 0.9);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .filter-copy-button:hover:not(:disabled) {
@@ -4196,15 +4239,16 @@ button:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 12px;
+  padding: 5px 10px;
   border-radius: 6px;
   border: 1px solid rgba(239, 68, 68, 0.3);
   background: rgba(239, 68, 68, 0.1);
   color: rgba(255, 255, 255, 0.9);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .filter-delete-button:hover:not(:disabled) {
@@ -4228,15 +4272,16 @@ button:focus {
 .detail-edit-button {
   padding: 8px 20px;
   border-radius: 999px;
-  border: 1px solid rgba(147, 51, 234, 0.45);
-  background: linear-gradient(135deg, rgba(147, 51, 234, 0.18), rgba(126, 34, 206, 0.14));
+  border: 1px solid rgba(147, 51, 234, 0.6);
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.3), rgba(126, 34, 206, 0.25));
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
   transition: all 0.25s ease;
-  box-shadow: 0 4px 12px rgba(147, 51, 234, 0.16);
+  box-shadow: 0 4px 12px rgba(147, 51, 234, 0.25);
+  backdrop-filter: blur(8px);
 }
 
 .detail-edit-button:hover:not(:disabled) {
@@ -4253,6 +4298,35 @@ button:focus {
 }
 
 .detail-edit-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.detail-delete-button {
+  padding: 8px 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(239, 68, 68, 0.6);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.25), rgba(220, 38, 38, 0.2));
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+  backdrop-filter: blur(8px);
+}
+
+.detail-delete-button:hover:not(:disabled) {
+  border-color: rgba(239, 68, 68, 0.85);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.35), rgba(220, 38, 38, 0.3));
+  box-shadow: 0 8px 18px rgba(239, 68, 68, 0.3);
+  transform: translateY(-1px);
+}
+
+.detail-delete-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
   transform: none;
@@ -4643,12 +4717,14 @@ button:focus {
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(11, 11, 15, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 999px;
   font-size: 14px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.9);
+  color: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 .meta-icon {
   font-size: 16px;

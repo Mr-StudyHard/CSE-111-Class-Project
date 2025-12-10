@@ -48,6 +48,8 @@ def ensure_extended_columns(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE movies ADD COLUMN backdrop_path TEXT")
         if not has_column("movies", "original_language"):
             conn.execute("ALTER TABLE movies ADD COLUMN original_language TEXT")
+        if not has_column("movies", "release_date"):
+            conn.execute("ALTER TABLE movies ADD COLUMN release_date TEXT")
         if not has_column("shows", "backdrop_path"):
             conn.execute("ALTER TABLE shows ADD COLUMN backdrop_path TEXT")
         if not has_column("shows", "original_language"):
@@ -114,16 +116,19 @@ def upsert_genres(conn: sqlite3.Connection, payload: Iterable[dict]):
 
 def upsert_movie(conn: sqlite3.Connection, data: dict):
     release_year = None
-    release_date = data.get("release_date")
-    if release_date and len(release_date) >= 4:
+    release_date_full = data.get("release_date")
+    if release_date_full and len(release_date_full) >= 4:
         try:
-            release_year = int(release_date[:4])
+            release_year = int(release_date_full[:4])
         except ValueError:
             release_year = None
+    # Store full date if available (YYYY-MM-DD format)
+    release_date = release_date_full if release_date_full and len(release_date_full) >= 10 else None
     params = (
         data.get("id"),
         data.get("title"),
         release_year,
+        release_date,
         data.get("runtime"),
         data.get("overview"),
         data.get("poster_path"),
@@ -135,12 +140,13 @@ def upsert_movie(conn: sqlite3.Connection, data: dict):
     conn.execute(
         """
         INSERT INTO movies (
-            tmdb_id, title, release_year, runtime_min, overview, poster_path,
+            tmdb_id, title, release_year, release_date, runtime_min, overview, poster_path,
             backdrop_path, original_language, tmdb_vote_avg, popularity
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(tmdb_id) DO UPDATE SET
             title = excluded.title,
             release_year = excluded.release_year,
+            release_date = excluded.release_date,
             runtime_min = excluded.runtime_min,
             overview = excluded.overview,
             poster_path = excluded.poster_path,
