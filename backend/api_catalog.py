@@ -1352,17 +1352,20 @@ def _list_media(media_type: str, sort: str, page: int, limit: int, genre: str | 
     params_count = []
     params_rows = []
     
-    # Add genre filter
-    if genre and genre.lower() != "all":
-        where_conditions.append("g.name = ?")
-        params_count.append(genre)
-        params_rows.append(genre)
+    # Add genre filter (case-insensitive)
+    if genre and genre.strip() and genre.strip().lower() != "all":
+        genre_value = genre.strip()
+        where_conditions.append("LOWER(g.name) = LOWER(?)")
+        params_count.append(genre_value)
+        params_rows.append(genre_value)
     
-    # Add language filter
-    if language and language.lower() != "all":
-        where_conditions.append("t.original_language = ?")
-        params_count.append(language)
-        params_rows.append(language)
+    # Add language filter (case-insensitive)
+    if language and language.strip() and language.strip().lower() != "all":
+        language_value = language.strip()
+        # Ensure original_language is not NULL/empty and matches (case-insensitive)
+        where_conditions.append("t.original_language IS NOT NULL AND t.original_language != '' AND LOWER(TRIM(t.original_language)) = LOWER(TRIM(?))")
+        params_count.append(language_value)
+        params_rows.append(language_value)
     
     where_clause = " AND ".join(where_conditions)
     

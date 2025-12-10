@@ -8,6 +8,10 @@
   --chip: #1f2937;
 }
 
+html {
+  zoom: 0.67; /* Scale down to 67% to match desired visual scale at 100% browser zoom */
+}
+
 * {
   box-sizing: border-box;
 }
@@ -1437,6 +1441,23 @@ button:focus {
   font-size: 13px;
   font-weight: 600;
   color: var(--text);
+}
+
+.analytics-reviewer-name[type="button"] {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: color 0.2s ease, text-decoration 0.2s ease;
+}
+
+.analytics-reviewer-name[type="button"]:hover {
+  color: var(--primary);
+  text-decoration: underline;
 }
 
 .analytics-reviewer-meta {

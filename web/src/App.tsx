@@ -1332,6 +1332,62 @@ export default function App() {
     loadTv(1, { genre: nextGenre, language: nextLanguage, sort: nextSort })
   }
 
+  const handleSurpriseMeMovies = async () => {
+    if (moviesLoading) return
+    // If we have loaded movies, pick randomly from current page
+    if (movies.length > 0) {
+      const randomMovie = movies[Math.floor(Math.random() * movies.length)]
+      if (randomMovie && randomMovie.id) {
+        navigateToDetail('movie', randomMovie.id)
+        return
+      }
+    }
+    // Otherwise, load a random page and pick from there
+    if (moviesTotal > 0) {
+      const randomPage = Math.floor(Math.random() * Math.ceil(moviesTotal / LIST_PAGE_SIZE)) + 1
+      try {
+        const data = await getList('movie', moviesSort, randomPage, LIST_PAGE_SIZE, moviesGenre === 'all' ? undefined : moviesGenre, moviesLanguage === 'all' ? undefined : moviesLanguage)
+        const results = data?.results ?? []
+        if (results.length > 0) {
+          const randomMovie = results[Math.floor(Math.random() * results.length)]
+          if (randomMovie && randomMovie.id) {
+            navigateToDetail('movie', randomMovie.id)
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load random movie:', err)
+      }
+    }
+  }
+
+  const handleSurpriseMeTv = async () => {
+    if (tvLoading) return
+    // If we have loaded shows, pick randomly from current page
+    if (tv.length > 0) {
+      const randomShow = tv[Math.floor(Math.random() * tv.length)]
+      if (randomShow && randomShow.id) {
+        navigateToDetail('tv', randomShow.id)
+        return
+      }
+    }
+    // Otherwise, load a random page and pick from there
+    if (tvTotal > 0) {
+      const randomPage = Math.floor(Math.random() * Math.ceil(tvTotal / LIST_PAGE_SIZE)) + 1
+      try {
+        const data = await getList('tv', tvSort, randomPage, LIST_PAGE_SIZE, tvGenre === 'all' ? undefined : tvGenre, tvLanguage === 'all' ? undefined : tvLanguage)
+        const results = data?.results ?? []
+        if (results.length > 0) {
+          const randomShow = results[Math.floor(Math.random() * results.length)]
+          if (randomShow && randomShow.id) {
+            navigateToDetail('tv', randomShow.id)
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load random TV show:', err)
+      }
+    }
+  }
+
   async function load(){
     setBusy(true)
     try{
@@ -2372,7 +2428,6 @@ export default function App() {
                   }}></div>
                   <div style={{position:'relative', zIndex:1}}>
                     <div style={{display:'flex', alignItems:'center', gap:'12px', marginBottom:'24px'}}>
-                      <div style={{fontSize:'24px'}}>🎬</div>
                       <h2 style={{margin:0, fontSize:'22px', fontWeight:700, color:'var(--text)'}}>Movies</h2>
                     </div>
                     <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px'}}>
@@ -2418,7 +2473,6 @@ export default function App() {
                   }}></div>
                   <div style={{position:'relative', zIndex:1}}>
                     <div style={{display:'flex', alignItems:'center', gap:'12px', marginBottom:'24px'}}>
-                      <div style={{fontSize:'24px'}}>📺</div>
                       <h2 style={{margin:0, fontSize:'22px', fontWeight:700, color:'var(--text)'}}>TV Shows</h2>
                     </div>
                     <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px'}}>
@@ -2456,7 +2510,7 @@ export default function App() {
               <div style={{marginBottom:'40px'}}>
                 <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
                   <h3 style={{margin:0, fontSize:'20px', fontWeight:600, color:'var(--text)', display:'flex', alignItems:'center', gap:'10px'}}>
-                    <span style={{fontSize:'24px'}}>🎬</span> Movies
+                    Movies
                   </h3>
                   {publicMovieFavorites.length > 0 && (
                     <div style={{fontSize:'14px', color:'var(--muted)'}}>
@@ -2475,7 +2529,6 @@ export default function App() {
                     border:'1px solid rgba(255, 255, 255, 0.08)',
                     borderRadius:'16px'
                   }}>
-                    <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>🎬</div>
                     <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No movie favorites yet.</p>
                   </div>
                 ) : (
@@ -2536,7 +2589,7 @@ export default function App() {
               <div>
                 <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
                   <h3 style={{margin:0, fontSize:'20px', fontWeight:600, color:'var(--text)', display:'flex', alignItems:'center', gap:'10px'}}>
-                    <span style={{fontSize:'24px'}}>📺</span> TV Shows
+                    TV Shows
                   </h3>
                   {publicTvFavorites.length > 0 && (
                     <div style={{fontSize:'14px', color:'var(--muted)'}}>
@@ -2555,7 +2608,6 @@ export default function App() {
                     border:'1px solid rgba(255, 255, 255, 0.08)',
                     borderRadius:'16px'
                   }}>
-                    <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>📺</div>
                     <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No TV favorites yet.</p>
                   </div>
                 ) : (
@@ -2617,7 +2669,7 @@ export default function App() {
             {viewingUserProfile.recent_reviews && viewingUserProfile.recent_reviews.length > 0 && (
               <div style={{marginBottom:'40px'}}>
                 <h2 style={{margin:0, marginBottom:'24px', fontSize:'24px', fontWeight:700, color:'var(--text)'}}>
-                  📝 Recent Reviews
+                  Recent Reviews
                 </h2>
                 <div style={{display:'flex', flexDirection:'column', gap:'16px'}}>
                   {viewingUserProfile.recent_reviews.map((review, idx) => (
@@ -2688,7 +2740,7 @@ export default function App() {
                             textAlign:'left'
                           }}
                         >
-                          {review.media_type === 'movie' ? '🎬' : '📺'} {review.title}
+                          {review.title}
                         </button>
                         {review.rating !== null && (
                           <div style={{fontSize:'14px', color:'#fbbf24', fontWeight:600, marginBottom:'8px'}}>
@@ -2735,10 +2787,6 @@ export default function App() {
                     gap:'12px',
                     textShadow:'0 2px 8px rgba(229, 9, 20, 0.4)'
                   }}>
-                    <span style={{
-                      fontSize:'28px',
-                      filter:'drop-shadow(0 2px 4px rgba(229, 9, 20, 0.5))'
-                    }}>🎬</span> 
                     <span style={{
                       background:'linear-gradient(135deg, #ff6b6b 0%, #e50914 100%)',
                       WebkitBackgroundClip:'text',
@@ -2809,7 +2857,6 @@ export default function App() {
                     border:'1px solid rgba(229, 9, 20, 0.3)',
                     borderRadius:'16px'
                   }}>
-                    <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>🎬</div>
                     <p style={{color:'rgba(255, 255, 255, 0.7)', fontSize:'16px', margin:0}}>No movies in watchlist.</p>
                   </div>
                 ) : (
@@ -2876,10 +2923,6 @@ export default function App() {
                     gap:'12px',
                     textShadow:'0 2px 8px rgba(37, 99, 235, 0.4)'
                   }}>
-                    <span style={{
-                      fontSize:'28px',
-                      filter:'drop-shadow(0 2px 4px rgba(37, 99, 235, 0.5))'
-                    }}>📺</span> 
                     <span style={{
                       background:'linear-gradient(135deg, #60a5fa 0%, #2563eb 100%)',
                       WebkitBackgroundClip:'text',
@@ -2950,7 +2993,6 @@ export default function App() {
                     border:'1px solid rgba(37, 99, 235, 0.3)',
                     borderRadius:'16px'
                   }}>
-                    <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>📺</div>
                     <p style={{color:'rgba(255, 255, 255, 0.7)', fontSize:'16px', margin:0}}>No TV shows in watchlist.</p>
                   </div>
                 ) : (
@@ -3171,7 +3213,6 @@ export default function App() {
               }}></div>
               <div style={{position:'relative', zIndex:1}}>
                 <div style={{display:'flex', alignItems:'center', gap:'12px', marginBottom:'24px'}}>
-                  <div style={{fontSize:'24px'}}>🎬</div>
                   <h2 style={{margin:0, fontSize:'22px', fontWeight:700, color:'var(--text)'}}>Movies</h2>
                 </div>
                 <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px'}}>
@@ -3217,7 +3258,6 @@ export default function App() {
               }}></div>
               <div style={{position:'relative', zIndex:1}}>
                 <div style={{display:'flex', alignItems:'center', gap:'12px', marginBottom:'24px'}}>
-                  <div style={{fontSize:'24px'}}>📺</div>
                   <h2 style={{margin:0, fontSize:'22px', fontWeight:700, color:'var(--text)'}}>TV Shows</h2>
                 </div>
                 <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px'}}>
@@ -3253,7 +3293,7 @@ export default function App() {
           <div style={{marginBottom:'40px'}}>
             <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
               <h3 style={{margin:0, fontSize:'20px', fontWeight:600, color:'var(--text)', display:'flex', alignItems:'center', gap:'10px'}}>
-                <span style={{fontSize:'24px'}}>🎬</span> Movies
+                Movies
               </h3>
               {movieFavorites.length > 0 && (
                 <div style={{fontSize:'14px', color:'var(--muted)'}}>
@@ -3272,8 +3312,7 @@ export default function App() {
                 border:'1px solid rgba(255, 255, 255, 0.08)',
                 borderRadius:'16px'
               }}>
-                <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>🎬</div>
-                <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No movie favorites yet. Use the ❤️ Favorite button on any movie to add it here!</p>
+                <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No movie favorites yet. Use the Favorite button on any movie to add it here!</p>
               </div>
             ) : (
               <>
@@ -3336,7 +3375,7 @@ export default function App() {
           <div>
             <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
               <h3 style={{margin:0, fontSize:'20px', fontWeight:600, color:'var(--text)', display:'flex', alignItems:'center', gap:'10px'}}>
-                <span style={{fontSize:'24px'}}>📺</span> TV Shows
+                TV Shows
               </h3>
               {tvFavorites.length > 0 && (
                 <div style={{fontSize:'14px', color:'var(--muted)'}}>
@@ -3355,8 +3394,7 @@ export default function App() {
                 border:'1px solid rgba(255, 255, 255, 0.08)',
                 borderRadius:'16px'
               }}>
-                <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>📺</div>
-                <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No TV favorites yet. Use the ❤️ Favorite button on any show to add it here!</p>
+                <p style={{color:'var(--muted)', fontSize:'16px', margin:0}}>No TV favorites yet. Use the Favorite button on any show to add it here!</p>
               </div>
             ) : (
               <>
@@ -3420,7 +3458,7 @@ export default function App() {
         {profileData?.recent_reviews && profileData.recent_reviews.length > 0 && (
           <div style={{marginBottom:'40px'}}>
             <h2 style={{margin:0, marginBottom:'24px', fontSize:'24px', fontWeight:700, color:'var(--text)'}}>
-              📝 Recent Reviews
+              Recent Reviews
             </h2>
             <div style={{display:'flex', flexDirection:'column', gap:'16px'}}>
               {profileData.recent_reviews.map((review, idx) => (
@@ -3491,7 +3529,7 @@ export default function App() {
                         textAlign:'left'
                       }}
                     >
-                      {review.media_type === 'movie' ? '🎬' : '📺'} {review.title}
+                      {review.title}
                     </button>
                     {review.rating !== null && (
                       <div style={{fontSize:'14px', color:'#fbbf24', fontWeight:600, marginBottom:'8px'}}>
@@ -3538,10 +3576,6 @@ export default function App() {
                 gap:'12px',
                 textShadow:'0 2px 8px rgba(229, 9, 20, 0.4)'
               }}>
-                <span style={{
-                  fontSize:'28px',
-                  filter:'drop-shadow(0 2px 4px rgba(229, 9, 20, 0.5))'
-                }}>🎬</span> 
                 <span style={{
                   background:'linear-gradient(135deg, #ff6b6b 0%, #e50914 100%)',
                   WebkitBackgroundClip:'text',
@@ -3612,7 +3646,6 @@ export default function App() {
                 border:'1px solid rgba(229, 9, 20, 0.3)',
                 borderRadius:'16px'
               }}>
-                <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>🎬</div>
                 <p style={{color:'rgba(255, 255, 255, 0.7)', fontSize:'16px', margin:0}}>No movies in your watchlist. Add movies to watch later!</p>
               </div>
             ) : (
@@ -3679,10 +3712,6 @@ export default function App() {
                 gap:'12px',
                 textShadow:'0 2px 8px rgba(37, 99, 235, 0.4)'
               }}>
-                <span style={{
-                  fontSize:'28px',
-                  filter:'drop-shadow(0 2px 4px rgba(37, 99, 235, 0.5))'
-                }}>📺</span> 
                 <span style={{
                   background:'linear-gradient(135deg, #60a5fa 0%, #2563eb 100%)',
                   WebkitBackgroundClip:'text',
@@ -3753,7 +3782,6 @@ export default function App() {
                 border:'1px solid rgba(37, 99, 235, 0.3)',
                 borderRadius:'16px'
               }}>
-                <div style={{fontSize:'48px', marginBottom:'16px', opacity:0.5}}>📺</div>
                 <p style={{color:'rgba(255, 255, 255, 0.7)', fontSize:'16px', margin:0}}>No TV shows in your watchlist. Add shows to watch later!</p>
               </div>
             ) : (
@@ -6129,31 +6157,7 @@ export default function App() {
       </header>
       {tab==='home' && (
         <section className="hero">
-          <h1>PlotSignal</h1>
-          <p>Track trends, analyze ratings, and discover insights across your favorite movies and shows.</p>
-          <div className="hero-actions">
-            <button className="btn-solid btn-lg" onClick={()=>navigateToTab('analytics')}>Get Started</button>
-          </div>
-
-          <div className="features">
-            <div className="feature-card">
-              <div className="feature-icon">🎬</div>
-              <h3>Explore Movies</h3>
-              <p>Dive into box office stats, critic reviews, and audience trends for every film.</p>
-            </div>
-            <div className="feature-card">
-              <div className="feature-icon">📺</div>
-              <h3>Track TV Shows</h3>
-              <p>Analyze popularity over seasons, compare networks, and follow ratings evolution.</p>
-            </div>
-            <div className="feature-card">
-              <div className="feature-icon">📈</div>
-              <h3>View Analytics</h3>
-              <p>Visualize data trends, compare genres, and uncover audience preferences.</p>
-            </div>
-          </div>
-
-          <div className="home-spotlight">
+          <div className="home-spotlight" style={{ marginTop: '2rem' }}>
             <div className="trending-hero">
               {carouselLoading ? (
                 <div className="trending-hero-empty">Loading trending titles…</div>
@@ -6477,7 +6481,6 @@ export default function App() {
               TOP RATED SECTION
               ═══════════════════════════════════════════════════════════════════ */}
           <div className="analytics-section-divider">
-            <span className="analytics-divider-icon">⭐</span>
             <span className="analytics-divider-text">Top Rated</span>
           </div>
 
@@ -6485,7 +6488,6 @@ export default function App() {
             {/* Top Rated Movies */}
             <div className="analytics-column-card">
               <header className="analytics-column-header">
-                <span className="analytics-column-icon">🎬</span>
                 <h3>Top Movies</h3>
               </header>
               <div className="analytics-compact-list">
@@ -6525,7 +6527,6 @@ export default function App() {
             {/* Top Rated Shows */}
             <div className="analytics-column-card">
               <header className="analytics-column-header">
-                <span className="analytics-column-icon">📺</span>
                 <h3>Top TV Shows</h3>
               </header>
               <div className="analytics-compact-list">
@@ -6567,7 +6568,6 @@ export default function App() {
               COMMUNITY INSIGHTS
               ═══════════════════════════════════════════════════════════════════ */}
           <div className="analytics-section-divider">
-            <span className="analytics-divider-icon">👥</span>
             <span className="analytics-divider-text">Community Insights</span>
           </div>
 
@@ -6575,7 +6575,6 @@ export default function App() {
             {/* Popular Watchlists */}
             <div className="analytics-column-card">
               <header className="analytics-column-header">
-                <span className="analytics-column-icon">📋</span>
                 <h3>Most Watchlisted</h3>
               </header>
               <div className="analytics-compact-list">
@@ -6614,14 +6613,13 @@ export default function App() {
             {/* Top Reviewers */}
             <div className="analytics-column-card">
               <header className="analytics-column-header">
-                <span className="analytics-column-icon">✍️</span>
                 <h3>Top Reviewers</h3>
               </header>
               <div className="analytics-compact-list">
                 {analyticsLoading ? (
                   <div className="analytics-loading">Loading...</div>
                 ) : activeReviewers.length > 0 ? (
-                  activeReviewers.slice(0, 5).map((reviewer, idx) => (
+                  activeReviewers.slice(0, 6).map((reviewer, idx) => (
                     <div
                       key={`reviewer-${reviewer.user_id}-${idx}`}
                       className="analytics-reviewer-item"
@@ -6631,7 +6629,13 @@ export default function App() {
                         {reviewer.display_name.charAt(0).toUpperCase()}
                       </div>
                       <div className="analytics-reviewer-info">
-                        <span className="analytics-reviewer-name">{reviewer.display_name}</span>
+                        <button
+                          type="button"
+                          className="analytics-reviewer-name"
+                          onClick={() => openUserProfile(reviewer.user_id)}
+                        >
+                          {reviewer.display_name}
+                        </button>
                         <span className="analytics-reviewer-meta">
                           {reviewer.review_count} reviews
                           {reviewer.avg_rating ? ` · Avg: ${reviewer.avg_rating}` : ''}
@@ -6659,7 +6663,6 @@ export default function App() {
             <div className="analytics-column-card analytics-column-card-wide">
               <header className="analytics-column-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <span className="analytics-column-icon">🎭</span>
                   <h3>Genre Distribution</h3>
                 </div>
                 <div className="analytics-toggle-group">
@@ -6708,7 +6711,6 @@ export default function App() {
             {/* Format Split - Pie Chart */}
             <div className="analytics-column-card">
               <header className="analytics-column-header">
-                <span className="analytics-column-icon">🥧</span>
                 <h3>Format Split</h3>
               </header>
               <div className="analytics-pie-chart-wrapper">
@@ -6815,7 +6817,6 @@ export default function App() {
           {/* Language Footprint */}
           <div className="analytics-full-width-card">
             <header className="analytics-column-header">
-              <span className="analytics-column-icon">🌍</span>
               <h3>Language Footprint</h3>
               <span className="analytics-header-badge">{analyticsSnapshot.languageCount} languages</span>
             </header>
@@ -6842,13 +6843,11 @@ export default function App() {
           {unreviewedTitles.length > 0 && (
             <>
               <div className="analytics-section-divider">
-                <span className="analytics-divider-icon">💡</span>
                 <span className="analytics-divider-text">Needs Your Review</span>
               </div>
 
               <div className="analytics-full-width-card">
                 <header className="analytics-column-header">
-                  <span className="analytics-column-icon">📝</span>
                   <h3>Unreviewed Titles</h3>
                   <span className="analytics-header-badge">Be the first to review!</span>
                 </header>
@@ -6870,8 +6869,8 @@ export default function App() {
                       <div className="analytics-unreviewed-info">
                         <span className="analytics-unreviewed-title">{item.title}</span>
                         <span className="analytics-unreviewed-meta">
-                          {item.media_type === 'movie' ? '🎬' : '📺'} 
-                          {item.vote_average ? ` TMDb: ${item.vote_average.toFixed(1)}` : ' No rating yet'}
+                          {item.media_type === 'movie' ? 'Movie' : 'TV'} 
+                          {item.vote_average ? ` · TMDb: ${item.vote_average.toFixed(1)}` : ' · No rating yet'}
                         </span>
                       </div>
                     </button>
@@ -6887,14 +6886,12 @@ export default function App() {
           {currentUser?.is_admin && genreRatings.length > 0 && (
             <>
               <div className="analytics-section-divider analytics-admin-divider">
-                <span className="analytics-divider-icon">🔧</span>
                 <span className="analytics-divider-text">Admin Analytics</span>
               </div>
 
               <div className="analytics-full-width-card analytics-admin-card">
                 <header className="analytics-column-header">
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <span className="analytics-column-icon">⭐</span>
                     <h3>Genre Ratings</h3>
                   </div>
                   <div className="analytics-toggle-group">
@@ -6980,6 +6977,28 @@ export default function App() {
                 disabled={moviesLoading}
               >
                 Search
+              </button>
+              <button
+                type="button"
+                className="filter-apply-button"
+                onClick={handleSurpriseMeMovies}
+                disabled={moviesLoading || movies.length === 0}
+                style={{
+                  borderColor: 'rgba(147, 51, 234, 0.45)',
+                  background: 'linear-gradient(135deg, rgba(147, 51, 234, 0.18), rgba(107, 33, 168, 0.14))'
+                }}
+                onMouseEnter={(e) => {
+                  if (!moviesLoading && movies.length > 0) {
+                    e.currentTarget.style.borderColor = 'rgba(147, 51, 234, 0.75)'
+                    e.currentTarget.style.background = 'linear-gradient(135deg, rgba(147, 51, 234, 0.28), rgba(107, 33, 168, 0.22))'
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(147, 51, 234, 0.45)'
+                  e.currentTarget.style.background = 'linear-gradient(135deg, rgba(147, 51, 234, 0.18), rgba(107, 33, 168, 0.14))'
+                }}
+              >
+                Surprise Me
               </button>
             </div>
             <div className="filter-pagination">
@@ -7211,6 +7230,28 @@ export default function App() {
                 disabled={tvLoading}
               >
                 Search
+              </button>
+              <button
+                type="button"
+                className="filter-apply-button"
+                onClick={handleSurpriseMeTv}
+                disabled={tvLoading || (tv.length === 0 && tvTotal === 0)}
+                style={{
+                  borderColor: 'rgba(147, 51, 234, 0.45)',
+                  background: 'linear-gradient(135deg, rgba(147, 51, 234, 0.18), rgba(107, 33, 168, 0.14))'
+                }}
+                onMouseEnter={(e) => {
+                  if (!tvLoading && (tv.length > 0 || tvTotal > 0)) {
+                    e.currentTarget.style.borderColor = 'rgba(147, 51, 234, 0.75)'
+                    e.currentTarget.style.background = 'linear-gradient(135deg, rgba(147, 51, 234, 0.28), rgba(107, 33, 168, 0.22))'
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(147, 51, 234, 0.45)'
+                  e.currentTarget.style.background = 'linear-gradient(135deg, rgba(147, 51, 234, 0.18), rgba(107, 33, 168, 0.14))'
+                }}
+              >
+                Surprise Me
               </button>
             </div>
             <div className="filter-pagination">
