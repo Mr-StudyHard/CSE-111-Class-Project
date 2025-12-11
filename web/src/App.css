@@ -5103,6 +5103,55 @@ button:focus {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+/* Discussion Board / Comments Section */
+.comments-list {
+  margin-top: 20px;
+}
+
+.comment-item {
+  padding: 16px;
+  background: rgba(11, 11, 15, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.comment-item .review-content {
+  margin-bottom: 8px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.comment-item .review-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 8px;
+}
+
+.review-author-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  text-decoration: underline;
+  font-weight: 500;
+}
+
+.review-author-link:hover {
+  opacity: 0.8;
+}
+
+.review-date {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
 .review-count-display {
   background: rgba(37, 99, 235, 0.15);
   border: 1px solid rgba(37, 99, 235, 0.3);

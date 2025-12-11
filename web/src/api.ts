@@ -383,6 +383,89 @@ export async function getReviewReactions(reviewId: number) {
 	}
 }
 
+// ============================================================================
+// Discussion Board / Comments API Functions
+// ============================================================================
+
+export type Comment = {
+	comment_id: number
+	user_id: number
+	user_email: string
+	display_name: string
+	parent_comment_id: number | null
+	body: string
+	is_deleted: boolean
+	created_at: string
+	updated_at: string
+	replies: Comment[]
+}
+
+export type CommentsResponse = {
+	ok: boolean
+	comments: Comment[]
+	count: number
+	error?: string
+}
+
+export async function getTitleComments(titleType: 'movie' | 'show', titleId: number) {
+	try {
+		const { data } = await api.get('/discussion/comments', {
+			params: { title_type: titleType, title_id: titleId }
+		})
+		return data as CommentsResponse
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to fetch comments'
+		return { ok: false, comments: [], count: 0, error: String(msg) }
+	}
+}
+
+export async function createTitleComment(
+	titleType: 'movie' | 'show',
+	titleId: number,
+	body: string,
+	parentCommentId?: number
+) {
+	try {
+		const payload: any = {
+			title_type: titleType,
+			title_id: titleId,
+			body: body
+		}
+		if (parentCommentId !== undefined) {
+			payload.parent_comment_id = parentCommentId
+		}
+		const { data } = await api.post('/discussion/comments', payload)
+		return data as { ok: boolean; comment?: Comment; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to create comment'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function updateTitleComment(commentId: number, body: string) {
+	try {
+		const { data } = await api.put(`/discussion/comments/${commentId}`, { body })
+		return data as { ok: boolean; comment?: Comment; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to update comment'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+export async function deleteTitleComment(commentId: number) {
+	try {
+		const { data } = await api.delete(`/discussion/comments/${commentId}`)
+		return data as { ok: boolean; message?: string; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to delete comment'
+		return { ok: false, error: String(msg) }
+	}
+}
+
 export async function updateMedia(mediaType: 'movie' | 'tv', id: number, payload: UpdateMediaPayload) {
 	try {
 		const path = mediaType === 'movie' ? `/movies/${id}` : `/tv/${id}`
