@@ -3930,6 +3930,331 @@ def add_review_reaction(review_id: int):
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.get("/api/discussion/comments")
+def get_title_comments():
+    """
+    Get all comments (with nested replies) for a movie or TV show.
+    Query parameters:
+    - title_type: 'movie' or 'show'
+    - title_id: the movie_id or show_id
+    Returns a tree structure with nested replies.
+    """
+    title_type = request.args.get("title_type")
+    title_id = request.args.get("title_id")
+    
+    if not title_type or not title_id:
+        return jsonify({"ok": False, "error": "title_type and title_id are required"}), 400
+    
+    if title_type not in {"movie", "show"}:
+        return jsonify({"ok": False, "error": "title_type must be 'movie' or 'show'"}), 400
+    
+    try:
+        title_id_int = int(title_id)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "title_id must be an integer"}), 400
+    
+    # Verify title exists
+    conn = get_db()
+    if title_type == "movie":
+        title_check = conn.execute(
+            "SELECT movie_id FROM movies WHERE movie_id = ?",
+            (title_id_int,)
+        ).fetchone()
+    else:
+        title_check = conn.execute(
+            "SELECT show_id FROM shows WHERE show_id = ?",
+            (title_id_int,)
+        ).fetchone()
+    
+    if not title_check:
+        return jsonify({"ok": False, "error": "Title not found"}), 404
+    
+    # Fetch all comments for this title
+    rows = query(
+        """
+        SELECT c.comment_id, c.user_id, c.parent_comment_id, c.body, 
+               c.created_at, c.updated_at, c.is_deleted,
+               u.email AS user_email, u.display_name
+        FROM title_comments c
+        LEFT JOIN users u ON u.user_id = c.user_id
+        WHERE c.title_type = ? AND c.title_id = ?
+        ORDER BY c.created_at ASC
+        """,
+        (title_type, title_id_int)
+    )
+    
+    # Build a flat list first
+    comments_map = {}
+    root_comments = []
+    
+    for row in rows:
+        comment = {
+            "comment_id": row["comment_id"],
+            "user_id": row["user_id"],
+            "user_email": row["user_email"] or "",
+            "display_name": row["display_name"] or (row["user_email"] or "").split("@")[0],
+            "parent_comment_id": row["parent_comment_id"],
+            "body": "[deleted]" if row["is_deleted"] else row["body"],
+            "is_deleted": bool(row["is_deleted"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "replies": []
+        }
+        comments_map[comment["comment_id"]] = comment
+        
+        if comment["parent_comment_id"] is None:
+            root_comments.append(comment)
+        else:
+            # Add to parent's replies
+            parent = comments_map.get(comment["parent_comment_id"])
+            if parent:
+                parent["replies"].append(comment)
+    
+    return jsonify({"ok": True, "comments": root_comments, "count": len(rows)})
+
+
+@app.post("/api/discussion/comments")
+def create_title_comment():
+    """
+    Create a new comment or reply for a movie or TV show.
+    Auth: Required
+    Body: {
+        title_type: 'movie' | 'show',
+        title_id: int,
+        body: string,
+        parent_comment_id?: int (optional, for replies)
+    }
+    """
+    _ensure_auth_bootstrap()
+    user = _get_current_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    payload = request.get_json(force=True, silent=True) or {}
+    title_type = payload.get("title_type")
+    title_id = payload.get("title_id")
+    body = payload.get("body", "").strip()
+    parent_comment_id = payload.get("parent_comment_id")
+    
+    if not title_type or title_id is None:
+        return jsonify({"ok": False, "error": "title_type and title_id are required"}), 400
+    
+    if title_type not in {"movie", "show"}:
+        return jsonify({"ok": False, "error": "title_type must be 'movie' or 'show'"}), 400
+    
+    try:
+        title_id_int = int(title_id)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "title_id must be an integer"}), 400
+    
+    if not body:
+        return jsonify({"ok": False, "error": "Comment body is required"}), 400
+    
+    conn = get_db()
+    
+    # Verify title exists
+    if title_type == "movie":
+        title_check = conn.execute(
+            "SELECT movie_id FROM movies WHERE movie_id = ?",
+            (title_id_int,)
+        ).fetchone()
+    else:
+        title_check = conn.execute(
+            "SELECT show_id FROM shows WHERE show_id = ?",
+            (title_id_int,)
+        ).fetchone()
+    
+    if not title_check:
+        return jsonify({"ok": False, "error": "Title not found"}), 404
+    
+    # If parent_comment_id is provided, verify it exists and belongs to the same title
+    if parent_comment_id is not None:
+        try:
+            parent_id_int = int(parent_comment_id)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "parent_comment_id must be an integer"}), 400
+        
+        parent_check = conn.execute(
+            "SELECT comment_id FROM title_comments WHERE comment_id = ? AND title_type = ? AND title_id = ?",
+            (parent_id_int, title_type, title_id_int)
+        ).fetchone()
+        
+        if not parent_check:
+            return jsonify({"ok": False, "error": "Parent comment not found"}), 404
+    
+    # Insert the comment
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO title_comments (title_type, title_id, user_id, parent_comment_id, body, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (title_type, title_id_int, user["user_id"], parent_comment_id, body)
+        )
+        conn.commit()
+        
+        # Fetch the created comment with user info
+        new_comment_row = query(
+            """
+            SELECT c.comment_id, c.user_id, c.parent_comment_id, c.body, 
+                   c.created_at, c.updated_at, c.is_deleted,
+                   u.email AS user_email, u.display_name
+            FROM title_comments c
+            LEFT JOIN users u ON u.user_id = c.user_id
+            WHERE c.comment_id = ?
+            """,
+            (cur.lastrowid,)
+        )[0]
+        
+        comment = {
+            "comment_id": new_comment_row["comment_id"],
+            "user_id": new_comment_row["user_id"],
+            "user_email": new_comment_row["user_email"] or "",
+            "display_name": new_comment_row["display_name"] or (new_comment_row["user_email"] or "").split("@")[0],
+            "parent_comment_id": new_comment_row["parent_comment_id"],
+            "body": new_comment_row["body"],
+            "is_deleted": bool(new_comment_row["is_deleted"]),
+            "created_at": new_comment_row["created_at"],
+            "updated_at": new_comment_row["updated_at"],
+            "replies": []
+        }
+        
+        return jsonify({"ok": True, "comment": comment})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.put("/api/discussion/comments/<int:comment_id>")
+def update_title_comment(comment_id: int):
+    """
+    Update an existing comment.
+    Only the comment owner can update their comment, or admins can update any comment.
+    Auth: Required (comment owner or admin)
+    Body: { body: string }
+    """
+    _ensure_auth_bootstrap()
+    user = _get_current_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    payload = request.get_json(force=True, silent=True) or {}
+    body = payload.get("body", "").strip()
+    
+    if not body:
+        return jsonify({"ok": False, "error": "Comment body is required"}), 400
+    
+    conn = get_db()
+    try:
+        # Verify comment exists and get its owner
+        check_row = conn.execute(
+            "SELECT user_id, is_deleted FROM title_comments WHERE comment_id = ?",
+            (comment_id,)
+        ).fetchone()
+        
+        if not check_row:
+            return jsonify({"ok": False, "error": "Comment not found"}), 404
+        
+        if check_row["is_deleted"]:
+            return jsonify({"ok": False, "error": "Cannot edit deleted comment"}), 400
+        
+        comment_owner_id = check_row["user_id"]
+        is_owner = comment_owner_id == user["user_id"]
+        is_admin = user.get("is_admin", False)
+        
+        if not is_owner and not is_admin:
+            return jsonify({"ok": False, "error": "You can only edit your own comments"}), 403
+        
+        # Update the comment
+        conn.execute(
+            """
+            UPDATE title_comments 
+            SET body = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE comment_id = ?
+            """,
+            (body, comment_id)
+        )
+        conn.commit()
+        
+        # Fetch updated comment
+        updated_row = query(
+            """
+            SELECT c.comment_id, c.user_id, c.parent_comment_id, c.body, 
+                   c.created_at, c.updated_at, c.is_deleted,
+                   u.email AS user_email, u.display_name
+            FROM title_comments c
+            LEFT JOIN users u ON u.user_id = c.user_id
+            WHERE c.comment_id = ?
+            """,
+            (comment_id,)
+        )[0]
+        
+        comment = {
+            "comment_id": updated_row["comment_id"],
+            "user_id": updated_row["user_id"],
+            "user_email": updated_row["user_email"] or "",
+            "display_name": updated_row["display_name"] or (updated_row["user_email"] or "").split("@")[0],
+            "parent_comment_id": updated_row["parent_comment_id"],
+            "body": updated_row["body"],
+            "is_deleted": bool(updated_row["is_deleted"]),
+            "created_at": updated_row["created_at"],
+            "updated_at": updated_row["updated_at"],
+            "replies": []
+        }
+        
+        return jsonify({"ok": True, "comment": comment})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.delete("/api/discussion/comments/<int:comment_id>")
+def delete_title_comment(comment_id: int):
+    """
+    Delete an existing comment (soft delete - marks as deleted but keeps in DB).
+    Only the comment owner can delete their comment, or admins can delete any comment.
+    Auth: Required (comment owner or admin)
+    """
+    _ensure_auth_bootstrap()
+    user = _get_current_user()
+    if not user:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    conn = get_db()
+    try:
+        # Verify comment exists and get its owner
+        check_row = conn.execute(
+            "SELECT user_id FROM title_comments WHERE comment_id = ?",
+            (comment_id,)
+        ).fetchone()
+        
+        if not check_row:
+            return jsonify({"ok": False, "error": "Comment not found"}), 404
+        
+        comment_owner_id = check_row["user_id"]
+        is_owner = comment_owner_id == user["user_id"]
+        is_admin = user.get("is_admin", False)
+        
+        if not is_owner and not is_admin:
+            return jsonify({"ok": False, "error": "You can only delete your own comments"}), 403
+        
+        # Soft delete: mark as deleted
+        conn.execute(
+            """
+            UPDATE title_comments 
+            SET is_deleted = 1, body = '[deleted]', updated_at = CURRENT_TIMESTAMP
+            WHERE comment_id = ?
+            """,
+            (comment_id,)
+        )
+        conn.commit()
+        
+        return jsonify({"ok": True, "message": "Comment deleted successfully"})
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.get("/api/reviews/<int:review_id>/reactions")
 def get_review_reactions(review_id: int):
     """

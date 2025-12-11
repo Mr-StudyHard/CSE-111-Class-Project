@@ -165,6 +165,21 @@ CREATE TABLE IF NOT EXISTS review_reactions (
 CREATE INDEX IF NOT EXISTS idx_review_reactions_review ON review_reactions(review_id);
 CREATE INDEX IF NOT EXISTS idx_review_reactions_user ON review_reactions(user_id);
 
+CREATE TABLE IF NOT EXISTS title_comments (
+    comment_id      INTEGER PRIMARY KEY,
+    title_type      TEXT NOT NULL CHECK (title_type IN ('movie', 'show')),
+    title_id        INTEGER NOT NULL,
+    user_id         INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    parent_comment_id INTEGER REFERENCES title_comments(comment_id) ON DELETE CASCADE,
+    body            TEXT NOT NULL,
+    created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TEXT DEFAULT CURRENT_TIMESTAMP,
+    is_deleted      INTEGER DEFAULT 0 CHECK (is_deleted IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_title_comments_title ON title_comments(title_type, title_id);
+CREATE INDEX IF NOT EXISTS idx_title_comments_user ON title_comments(user_id);
+CREATE INDEX IF NOT EXISTS idx_title_comments_parent ON title_comments(parent_comment_id);
+
 COMMIT;
 
 
