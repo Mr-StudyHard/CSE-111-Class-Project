@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getFutureReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, updateReview, deleteReview, type Review, getUserByEmail, setAuthToken, clearAuthToken, getUserSettings, updateUserSettings, type UserSettings, getUserProfile, type UserProfile, deleteUserAccount, addToWatchlist, removeFromWatchlist, addToFavorites, removeFromFavorites, checkFavorite, getTopRatedMovies, getTopRatedShows, getGenreDistribution, type TopRatedItem, type GenreDistribution, getPopularWatchlists, getUnreviewedTitles, getActiveReviewers, getGenreRatings, type PopularWatchlistItem, type UnreviewedItem, type ActiveReviewer, type GenreRating, getPublicUserProfile, type PublicUserProfile, addReviewReaction, getReviewReactions } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getFutureReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, updateReview, deleteReview, type Review, getUserByEmail, setAuthToken, clearAuthToken, getUserSettings, updateUserSettings, type UserSettings, getUserProfile, type UserProfile, deleteUserAccount, addToWatchlist, removeFromWatchlist, addToFavorites, removeFromFavorites, checkFavorite, getTopRatedMovies, getTopRatedShows, getGenreDistribution, type TopRatedItem, type GenreDistribution, getPopularWatchlists, getUnreviewedTitles, getActiveReviewers, getGenreRatings, type PopularWatchlistItem, type UnreviewedItem, type ActiveReviewer, type GenreRating, getPublicUserProfile, type PublicUserProfile, addReviewReaction, getReviewReactions, type Discussion, type Comment, getMovieDiscussions, getShowDiscussions, createMovieDiscussion, createShowDiscussion, getDiscussionDetail, addDiscussionComment, deleteDiscussion, deleteComment } from './api'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
 type ReleaseFilter = 'all' | 'movie' | 'tv'
 
@@ -136,6 +136,7 @@ export default function App() {
     if (path === '/add') return 'add'
     if (path.startsWith('/movie/') || path.startsWith('/show/')) return 'detail'
     if (path.startsWith('/user/')) return 'public-profile'
+    if (path.startsWith('/discussions/')) return 'discussion-detail'
     return 'app'
   }
   
@@ -276,6 +277,17 @@ export default function App() {
   const [favoriteLoading, setFavoriteLoading] = useState(false)
   const [detailDeleting, setDetailDeleting] = useState(false)
   const [userReactions, setUserReactions] = useState<Record<number, string[]>>({}) // review_id -> emote_types[]
+  // Discussion state
+  const [discussions, setDiscussions] = useState<Discussion[]>([])
+  const [discussionsLoading, setDiscussionsLoading] = useState(false)
+  const [newDiscussionTitle, setNewDiscussionTitle] = useState('')
+  const [discussionSubmitting, setDiscussionSubmitting] = useState(false)
+  // Discussion detail state
+  const [discussionDetail, setDiscussionDetail] = useState<Discussion | null>(null)
+  const [discussionComments, setDiscussionComments] = useState<Comment[]>([])
+  const [discussionDetailLoading, setDiscussionDetailLoading] = useState(false)
+  const [newCommentText, setNewCommentText] = useState('')
+  const [commentSubmitting, setCommentSubmitting] = useState(false)
   // Cast carousel state
   const CAST_PAGE_SIZE = 6
   const [castPage, setCastPage] = useState(0)
@@ -408,6 +420,8 @@ export default function App() {
       setView('profile')
     } else if (path === '/settings') {
       setView('settings')
+    } else if (path.startsWith('/discussions/')) {
+      setView('discussion-detail')
     }
   }, [location.pathname])
 
@@ -1970,6 +1984,13 @@ export default function App() {
               setUserReactions(reactionsMap)
               setReviewsLoading(false)
             }
+            // Load discussions
+            setDiscussionsLoading(true)
+            const discussionsData = await getMovieDiscussions(numericId)
+            if(requestId === detailRequestId.current){
+              setDiscussions(discussionsData.discussions || [])
+              setDiscussionsLoading(false)
+            }
           }
         } else {
           const data = await getShowDetail(numericId)
@@ -2005,6 +2026,13 @@ export default function App() {
               }
               setUserReactions(reactionsMap)
               setReviewsLoading(false)
+            }
+            // Load discussions
+            setDiscussionsLoading(true)
+            const discussionsData = await getShowDiscussions(numericId)
+            if(requestId === detailRequestId.current){
+              setDiscussions(discussionsData.discussions || [])
+              setDiscussionsLoading(false)
             }
           }
         }
@@ -2074,6 +2102,33 @@ export default function App() {
     
     checkFavoriteStatus()
   }, [detailData, currentUser])
+
+  // Load discussion detail when viewing a discussion
+  useEffect(() => {
+    if (view !== 'discussion-detail') return
+    
+    const discussionIdMatch = location.pathname.match(/^\/discussions\/(\d+)/)
+    const discussionId = discussionIdMatch ? parseInt(discussionIdMatch[1], 10) : null
+    
+    if (!discussionId) return
+    
+    setDiscussionDetailLoading(true)
+    setDiscussionDetail(null)
+    setDiscussionComments([])
+    
+    getDiscussionDetail(discussionId).then(result => {
+      if (result.ok) {
+        setDiscussionDetail(result.discussion)
+        setDiscussionComments(result.comments)
+      } else {
+        console.error('Failed to load discussion:', result.error)
+      }
+    }).catch(err => {
+      console.error('Error loading discussion:', err)
+    }).finally(() => {
+      setDiscussionDetailLoading(false)
+    })
+  }, [view, location.pathname])
 
   if(view === 'login'){
     const onSubmit = async (ev: React.FormEvent) => {
@@ -6332,11 +6387,525 @@ export default function App() {
                       </div>
                     )}
                   </div>
+
+                  {/* Discussions Section (MyAnimeList-style) */}
+                  <div className="detail-discussions-section" style={{ marginTop: '32px' }}>
+                    <h3 className="section-title">Discussions</h3>
+                    <div className="discussion-count-display" style={{ marginBottom: '16px', color: 'var(--muted)', fontSize: '14px' }}>
+                      {discussions.length} discussion{discussions.length !== 1 ? 's' : ''} about this title
+                    </div>
+                    
+                    {/* Create Discussion Form */}
+                    {currentUser && (
+                      <div className="discussion-create-form" style={{
+                        marginBottom: '24px',
+                        padding: '16px',
+                        backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                        borderRadius: '12px',
+                        border: '1px solid rgba(255, 255, 255, 0.08)'
+                      }}>
+                        <div style={{ marginBottom: '12px', fontWeight: 600, color: 'var(--text)' }}>
+                          Start a New Discussion
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                          <input
+                            type="text"
+                            value={newDiscussionTitle}
+                            onChange={(e) => setNewDiscussionTitle(e.target.value)}
+                            placeholder="Discussion title..."
+                            maxLength={500}
+                            style={{
+                              flex: 1,
+                              padding: '10px 14px',
+                              borderRadius: '8px',
+                              backgroundColor: 'var(--bg)',
+                              color: 'var(--text)',
+                              border: '1px solid var(--border)',
+                              fontSize: '14px'
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!newDiscussionTitle.trim()) {
+                                alert('Please enter a discussion title.')
+                                return
+                              }
+                              if (!detailData) return
+                              
+                              setDiscussionSubmitting(true)
+                              try {
+                                const mediaType = detailData.media_type
+                                const id = mediaType === 'movie' 
+                                  ? (detailData as MovieDetail).movie_id 
+                                  : (detailData as ShowDetail).show_id
+                                
+                                const result = mediaType === 'movie'
+                                  ? await createMovieDiscussion(id, newDiscussionTitle.trim())
+                                  : await createShowDiscussion(id, newDiscussionTitle.trim())
+                                
+                                if (result.ok) {
+                                  setNewDiscussionTitle('')
+                                  // Reload discussions
+                                  const discussionsData = mediaType === 'movie'
+                                    ? await getMovieDiscussions(id)
+                                    : await getShowDiscussions(id)
+                                  setDiscussions(discussionsData.discussions || [])
+                                } else {
+                                  alert(`Failed to create discussion: ${result.error}`)
+                                }
+                              } catch (err: any) {
+                                alert(`Error creating discussion: ${err?.message || 'Unknown error'}`)
+                              } finally {
+                                setDiscussionSubmitting(false)
+                              }
+                            }}
+                            disabled={discussionSubmitting || !newDiscussionTitle.trim()}
+                            style={{
+                              padding: '10px 20px',
+                              borderRadius: '8px',
+                              backgroundColor: 'var(--accent)',
+                              color: '#fff',
+                              border: 'none',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                              opacity: discussionSubmitting || !newDiscussionTitle.trim() ? 0.6 : 1
+                            }}
+                          >
+                            {discussionSubmitting ? 'Creating...' : 'Create'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* Discussions List */}
+                    {discussionsLoading ? (
+                      <div style={{ color: 'var(--muted)', textAlign: 'center', padding: '20px' }}>
+                        Loading discussions...
+                      </div>
+                    ) : discussions.length > 0 ? (
+                      <div className="discussions-list" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        {discussions.map((discussion) => (
+                          <button
+                            key={discussion.discussion_id}
+                            type="button"
+                            onClick={() => {
+                              navigate(`/discussions/${discussion.discussion_id}`)
+                              setView('discussion-detail')
+                            }}
+                            style={{
+                              display: 'block',
+                              width: '100%',
+                              padding: '16px',
+                              backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                              border: '1px solid rgba(255, 255, 255, 0.08)',
+                              borderRadius: '10px',
+                              cursor: 'pointer',
+                              textAlign: 'left',
+                              transition: 'all 0.2s ease'
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.06)'
+                              e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)'
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.03)'
+                              e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)'
+                            }}
+                          >
+                            <div style={{
+                              fontSize: '15px',
+                              fontWeight: 600,
+                              color: 'var(--text)',
+                              marginBottom: '8px'
+                            }}>
+                              {discussion.title}
+                            </div>
+                            <div style={{
+                              display: 'flex',
+                              gap: '16px',
+                              fontSize: '13px',
+                              color: 'var(--muted)'
+                            }}>
+                              <span>👤 {discussion.user_display_name}</span>
+                              <span>💬 {discussion.comment_count || 0} comment{(discussion.comment_count || 0) !== 1 ? 's' : ''}</span>
+                              <span>📅 {new Date(discussion.created_at).toLocaleDateString()}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{
+                        color: 'var(--muted)',
+                        textAlign: 'center',
+                        padding: '40px 20px',
+                        backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                        borderRadius: '12px',
+                        border: '1px dashed rgba(255, 255, 255, 0.1)'
+                      }}>
+                        No discussions yet. {currentUser ? 'Be the first to start one!' : 'Log in to start a discussion.'}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         )}
+      </div>
+    )
+  }
+
+  // Discussion Detail View
+  if (view === 'discussion-detail') {
+    const discussionIdMatch = location.pathname.match(/^\/discussions\/(\d+)/)
+    const discussionId = discussionIdMatch ? parseInt(discussionIdMatch[1], 10) : null
+    
+    return (
+      <div className="container">
+        <header className="header">
+          <div className="header-left">
+            <div className="brand-group">
+              <button type="button" className="brand-link" onClick={() => navigateToTab('home')}>
+                PlotSignal
+              </button>
+            </div>
+          </div>
+          <div className="header-right">
+            <div className="header-actions">
+              {renderAccountControls()}
+            </div>
+          </div>
+        </header>
+        
+        <div style={{ padding: '24px', maxWidth: '900px', margin: '0 auto' }}>
+          {/* Back button */}
+          <button
+            type="button"
+            onClick={() => {
+              // Navigate back to the movie/show detail if we know which one
+              if (discussionDetail?.movie_id) {
+                navigate(`/movie/${discussionDetail.movie_id}`)
+                setView('detail')
+              } else if (discussionDetail?.show_id) {
+                navigate(`/show/${discussionDetail.show_id}`)
+                setView('detail')
+              } else {
+                navigate('/')
+                setView('app')
+              }
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 16px',
+              marginBottom: '24px',
+              backgroundColor: 'transparent',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              borderRadius: '8px',
+              color: 'var(--text)',
+              cursor: 'pointer',
+              fontSize: '14px'
+            }}
+          >
+            ← Back to Title
+          </button>
+          
+          {discussionDetailLoading ? (
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--muted)' }}>
+              Loading discussion...
+            </div>
+          ) : !discussionDetail ? (
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--muted)' }}>
+              Discussion not found
+            </div>
+          ) : (
+            <>
+              {/* Discussion Header */}
+              <div style={{
+                padding: '24px',
+                backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                borderRadius: '16px',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                marginBottom: '24px'
+              }}>
+                <h1 style={{
+                  fontSize: '24px',
+                  fontWeight: 700,
+                  color: 'var(--text)',
+                  marginBottom: '12px'
+                }}>
+                  {discussionDetail.title}
+                </h1>
+                <div style={{
+                  display: 'flex',
+                  gap: '20px',
+                  fontSize: '14px',
+                  color: 'var(--muted)',
+                  alignItems: 'center',
+                  flexWrap: 'wrap'
+                }}>
+                  <span>Started by <strong style={{ color: 'var(--accent)' }}>{discussionDetail.user_display_name}</strong></span>
+                  <span>📅 {new Date(discussionDetail.created_at).toLocaleDateString()}</span>
+                  <span>💬 {discussionComments.length} comment{discussionComments.length !== 1 ? 's' : ''}</span>
+                </div>
+                
+                {/* Delete discussion button (owner or admin only) */}
+                {currentUser && (currentUser.user_id === discussionDetail.user_id || currentUser.is_admin) && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!confirm('Are you sure you want to delete this discussion? All comments will be removed.')) return
+                      
+                      try {
+                        const result = await deleteDiscussion(discussionDetail.discussion_id)
+                        if (result.ok) {
+                          // Navigate back
+                          if (discussionDetail.movie_id) {
+                            navigate(`/movie/${discussionDetail.movie_id}`)
+                            setView('detail')
+                          } else if (discussionDetail.show_id) {
+                            navigate(`/show/${discussionDetail.show_id}`)
+                            setView('detail')
+                          } else {
+                            navigate('/')
+                            setView('app')
+                          }
+                        } else {
+                          alert(`Failed to delete discussion: ${result.error}`)
+                        }
+                      } catch (err: any) {
+                        alert(`Error: ${err?.message || 'Unknown error'}`)
+                      }
+                    }}
+                    style={{
+                      marginTop: '16px',
+                      padding: '8px 16px',
+                      backgroundColor: 'transparent',
+                      border: '1px solid #ff4444',
+                      borderRadius: '6px',
+                      color: '#ff4444',
+                      cursor: 'pointer',
+                      fontSize: '13px'
+                    }}
+                  >
+                    Delete Discussion
+                  </button>
+                )}
+              </div>
+              
+              {/* Comments List */}
+              <div style={{ marginBottom: '24px' }}>
+                <h3 style={{
+                  fontSize: '18px',
+                  fontWeight: 600,
+                  color: 'var(--text)',
+                  marginBottom: '16px'
+                }}>
+                  Comments ({discussionComments.length})
+                </h3>
+                
+                {discussionComments.length === 0 ? (
+                  <div style={{
+                    padding: '40px 20px',
+                    textAlign: 'center',
+                    color: 'var(--muted)',
+                    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                    borderRadius: '12px',
+                    border: '1px dashed rgba(255, 255, 255, 0.1)'
+                  }}>
+                    No comments yet. Be the first to comment!
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {discussionComments.map((comment) => (
+                      <div
+                        key={comment.comment_id}
+                        style={{
+                          padding: '16px',
+                          backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                          border: '1px solid rgba(255, 255, 255, 0.08)',
+                          borderRadius: '10px'
+                        }}
+                      >
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'flex-start',
+                          marginBottom: '10px'
+                        }}>
+                          <div style={{
+                            display: 'flex',
+                            gap: '12px',
+                            fontSize: '13px',
+                            color: 'var(--muted)'
+                          }}>
+                            <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+                              {comment.user_display_name}
+                            </span>
+                            <span>📅 {new Date(comment.created_at).toLocaleDateString()}</span>
+                          </div>
+                          
+                          {/* Delete comment button (owner or admin only) */}
+                          {currentUser && (currentUser.user_id === comment.user_id || currentUser.is_admin) && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!confirm('Delete this comment?')) return
+                                
+                                try {
+                                  const result = await deleteComment(comment.comment_id)
+                                  if (result.ok) {
+                                    // Reload comments
+                                    const updatedData = await getDiscussionDetail(discussionDetail.discussion_id)
+                                    if (updatedData.ok) {
+                                      setDiscussionComments(updatedData.comments)
+                                    }
+                                  } else {
+                                    alert(`Failed to delete comment: ${result.error}`)
+                                  }
+                                } catch (err: any) {
+                                  alert(`Error: ${err?.message || 'Unknown error'}`)
+                                }
+                              }}
+                              style={{
+                                padding: '4px 10px',
+                                backgroundColor: 'transparent',
+                                border: '1px solid rgba(255, 100, 100, 0.3)',
+                                borderRadius: '4px',
+                                color: '#ff6666',
+                                cursor: 'pointer',
+                                fontSize: '11px'
+                              }}
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                        <div style={{
+                          fontSize: '14px',
+                          color: 'var(--text)',
+                          lineHeight: 1.6,
+                          whiteSpace: 'pre-wrap'
+                        }}>
+                          {comment.content}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              
+              {/* Add Comment Form */}
+              {currentUser ? (
+                <div style={{
+                  padding: '20px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                  borderRadius: '12px',
+                  border: '1px solid rgba(255, 255, 255, 0.08)'
+                }}>
+                  <h4 style={{
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: 'var(--text)',
+                    marginBottom: '12px'
+                  }}>
+                    Add a Comment
+                  </h4>
+                  <textarea
+                    value={newCommentText}
+                    onChange={(e) => setNewCommentText(e.target.value)}
+                    placeholder="Write your comment..."
+                    maxLength={5000}
+                    rows={4}
+                    style={{
+                      width: '100%',
+                      padding: '12px',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--bg)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--border)',
+                      fontSize: '14px',
+                      resize: 'vertical',
+                      marginBottom: '12px'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!newCommentText.trim()) {
+                        alert('Please enter a comment.')
+                        return
+                      }
+                      
+                      setCommentSubmitting(true)
+                      try {
+                        const result = await addDiscussionComment(discussionDetail.discussion_id, newCommentText.trim())
+                        if (result.ok) {
+                          setNewCommentText('')
+                          // Reload comments
+                          const updatedData = await getDiscussionDetail(discussionDetail.discussion_id)
+                          if (updatedData.ok) {
+                            setDiscussionComments(updatedData.comments)
+                          }
+                        } else {
+                          alert(`Failed to add comment: ${result.error}`)
+                        }
+                      } catch (err: any) {
+                        alert(`Error: ${err?.message || 'Unknown error'}`)
+                      } finally {
+                        setCommentSubmitting(false)
+                      }
+                    }}
+                    disabled={commentSubmitting || !newCommentText.trim()}
+                    style={{
+                      padding: '10px 24px',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--accent)',
+                      color: '#fff',
+                      border: 'none',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      opacity: commentSubmitting || !newCommentText.trim() ? 0.6 : 1
+                    }}
+                  >
+                    {commentSubmitting ? 'Posting...' : 'Post Comment'}
+                  </button>
+                </div>
+              ) : (
+                <div style={{
+                  padding: '24px',
+                  textAlign: 'center',
+                  color: 'var(--muted)',
+                  backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                  borderRadius: '12px',
+                  border: '1px dashed rgba(255, 255, 255, 0.1)'
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigate('/login')
+                      setView('login')
+                    }}
+                    style={{
+                      padding: '10px 24px',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--accent)',
+                      color: '#fff',
+                      border: 'none',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Log in to comment
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     )
   }

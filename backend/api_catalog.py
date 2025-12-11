@@ -4320,6 +4320,469 @@ def serve_image(filename: str):
         return jsonify({"error": f"Error serving image: {str(exc)}", "trace": traceback.format_exc()}), 500
 
 
+# =============================================================================
+# Discussion System (MyAnimeList-style)
+# =============================================================================
+# The discussions table enforces: exactly one of movie_id OR show_id must be set
+# via CHECK constraint: (movie_id IS NOT NULL) <> (show_id IS NOT NULL)
+
+def _get_current_user_id() -> int | None:
+    """
+    Helper to get just the user_id from the authenticated user.
+    Returns None if not authenticated.
+    """
+    user = _get_current_user()
+    return user.get("user_id") if user else None
+
+
+@app.get("/api/movies/<int:movie_id>/discussions")
+def get_movie_discussions(movie_id: int):
+    """
+    Get all discussions for a specific movie.
+    Returns discussion list with author info and comment counts.
+    """
+    # Check if movie exists
+    movie_check = query("SELECT movie_id FROM movies WHERE movie_id = ?", (movie_id,))
+    if not movie_check:
+        return jsonify({"ok": False, "error": "Movie not found"}), 404
+    
+    rows = query(
+        """
+        SELECT 
+            d.discussion_id,
+            d.title,
+            d.user_id,
+            u.display_name AS user_display_name,
+            d.created_at,
+            (SELECT COUNT(*) FROM comments c WHERE c.discussion_id = d.discussion_id) AS comment_count
+        FROM discussions d
+        JOIN users u ON u.user_id = d.user_id
+        WHERE d.movie_id = ?
+        ORDER BY d.created_at DESC
+        """,
+        (movie_id,)
+    )
+    
+    discussions = []
+    for row in rows:
+        d = dict(row)
+        # Use email username as fallback for display_name
+        if not d.get("user_display_name"):
+            user_row = query("SELECT email FROM users WHERE user_id = ?", (d["user_id"],))
+            if user_row:
+                email = user_row[0]["email"]
+                d["user_display_name"] = email.split("@")[0] if "@" in email else email
+            else:
+                d["user_display_name"] = f"User {d['user_id']}"
+        discussions.append(d)
+    
+    return jsonify({"ok": True, "discussions": discussions, "count": len(discussions)})
+
+
+@app.get("/api/shows/<int:show_id>/discussions")
+def get_show_discussions(show_id: int):
+    """
+    Get all discussions for a specific TV show.
+    Returns discussion list with author info and comment counts.
+    """
+    # Check if show exists
+    show_check = query("SELECT show_id FROM shows WHERE show_id = ?", (show_id,))
+    if not show_check:
+        return jsonify({"ok": False, "error": "Show not found"}), 404
+    
+    rows = query(
+        """
+        SELECT 
+            d.discussion_id,
+            d.title,
+            d.user_id,
+            u.display_name AS user_display_name,
+            d.created_at,
+            (SELECT COUNT(*) FROM comments c WHERE c.discussion_id = d.discussion_id) AS comment_count
+        FROM discussions d
+        JOIN users u ON u.user_id = d.user_id
+        WHERE d.show_id = ?
+        ORDER BY d.created_at DESC
+        """,
+        (show_id,)
+    )
+    
+    discussions = []
+    for row in rows:
+        d = dict(row)
+        # Use email username as fallback for display_name
+        if not d.get("user_display_name"):
+            user_row = query("SELECT email FROM users WHERE user_id = ?", (d["user_id"],))
+            if user_row:
+                email = user_row[0]["email"]
+                d["user_display_name"] = email.split("@")[0] if "@" in email else email
+            else:
+                d["user_display_name"] = f"User {d['user_id']}"
+        discussions.append(d)
+    
+    return jsonify({"ok": True, "discussions": discussions, "count": len(discussions)})
+
+
+@app.post("/api/movies/<int:movie_id>/discussions")
+def create_movie_discussion(movie_id: int):
+    """
+    Create a new discussion for a movie.
+    Requires authentication. Body: { "title": "string" }
+    Note: The discussions table has a CHECK constraint that enforces
+    exactly one of movie_id OR show_id must be non-null.
+    """
+    user_id = _get_current_user_id()
+    if not user_id:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    # Check if movie exists
+    movie_check = query("SELECT movie_id FROM movies WHERE movie_id = ?", (movie_id,))
+    if not movie_check:
+        return jsonify({"ok": False, "error": "Movie not found"}), 404
+    
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get("title") or "").strip()
+    
+    if not title:
+        return jsonify({"ok": False, "error": "Discussion title is required"}), 400
+    
+    if len(title) > 500:
+        return jsonify({"ok": False, "error": "Title must be 500 characters or less"}), 400
+    
+    try:
+        conn = get_db()
+        cursor = conn.execute(
+            """
+            INSERT INTO discussions (user_id, movie_id, show_id, title)
+            VALUES (?, ?, NULL, ?)
+            """,
+            (user_id, movie_id, title)
+        )
+        conn.commit()
+        discussion_id = cursor.lastrowid
+        
+        # Fetch the created discussion
+        rows = query(
+            """
+            SELECT 
+                d.discussion_id,
+                d.title,
+                d.user_id,
+                u.display_name AS user_display_name,
+                d.created_at,
+                d.movie_id,
+                d.show_id
+            FROM discussions d
+            JOIN users u ON u.user_id = d.user_id
+            WHERE d.discussion_id = ?
+            """,
+            (discussion_id,)
+        )
+        
+        if not rows:
+            return jsonify({"ok": False, "error": "Failed to retrieve created discussion"}), 500
+        
+        discussion = dict(rows[0])
+        # Use email username as fallback for display_name
+        if not discussion.get("user_display_name"):
+            user_row = query("SELECT email FROM users WHERE user_id = ?", (user_id,))
+            if user_row:
+                email = user_row[0]["email"]
+                discussion["user_display_name"] = email.split("@")[0] if "@" in email else email
+            else:
+                discussion["user_display_name"] = f"User {user_id}"
+        
+        return jsonify({"ok": True, "discussion": discussion})
+    
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to create discussion: {str(exc)}"}), 500
+
+
+@app.post("/api/shows/<int:show_id>/discussions")
+def create_show_discussion(show_id: int):
+    """
+    Create a new discussion for a TV show.
+    Requires authentication. Body: { "title": "string" }
+    Note: The discussions table has a CHECK constraint that enforces
+    exactly one of movie_id OR show_id must be non-null.
+    """
+    user_id = _get_current_user_id()
+    if not user_id:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    # Check if show exists
+    show_check = query("SELECT show_id FROM shows WHERE show_id = ?", (show_id,))
+    if not show_check:
+        return jsonify({"ok": False, "error": "Show not found"}), 404
+    
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get("title") or "").strip()
+    
+    if not title:
+        return jsonify({"ok": False, "error": "Discussion title is required"}), 400
+    
+    if len(title) > 500:
+        return jsonify({"ok": False, "error": "Title must be 500 characters or less"}), 400
+    
+    try:
+        conn = get_db()
+        cursor = conn.execute(
+            """
+            INSERT INTO discussions (user_id, movie_id, show_id, title)
+            VALUES (?, NULL, ?, ?)
+            """,
+            (user_id, show_id, title)
+        )
+        conn.commit()
+        discussion_id = cursor.lastrowid
+        
+        # Fetch the created discussion
+        rows = query(
+            """
+            SELECT 
+                d.discussion_id,
+                d.title,
+                d.user_id,
+                u.display_name AS user_display_name,
+                d.created_at,
+                d.movie_id,
+                d.show_id
+            FROM discussions d
+            JOIN users u ON u.user_id = d.user_id
+            WHERE d.discussion_id = ?
+            """,
+            (discussion_id,)
+        )
+        
+        if not rows:
+            return jsonify({"ok": False, "error": "Failed to retrieve created discussion"}), 500
+        
+        discussion = dict(rows[0])
+        # Use email username as fallback for display_name
+        if not discussion.get("user_display_name"):
+            user_row = query("SELECT email FROM users WHERE user_id = ?", (user_id,))
+            if user_row:
+                email = user_row[0]["email"]
+                discussion["user_display_name"] = email.split("@")[0] if "@" in email else email
+            else:
+                discussion["user_display_name"] = f"User {user_id}"
+        
+        return jsonify({"ok": True, "discussion": discussion})
+    
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to create discussion: {str(exc)}"}), 500
+
+
+@app.get("/api/discussions/<int:discussion_id>")
+def get_discussion_detail(discussion_id: int):
+    """
+    Get a single discussion with all its comments.
+    Returns discussion info and comment list.
+    """
+    # Fetch discussion
+    discussion_rows = query(
+        """
+        SELECT 
+            d.discussion_id,
+            d.title,
+            d.user_id,
+            u.display_name AS user_display_name,
+            d.created_at,
+            d.movie_id,
+            d.show_id
+        FROM discussions d
+        JOIN users u ON u.user_id = d.user_id
+        WHERE d.discussion_id = ?
+        """,
+        (discussion_id,)
+    )
+    
+    if not discussion_rows:
+        return jsonify({"ok": False, "error": "Discussion not found"}), 404
+    
+    discussion = dict(discussion_rows[0])
+    # Use email username as fallback for display_name
+    if not discussion.get("user_display_name"):
+        user_row = query("SELECT email FROM users WHERE user_id = ?", (discussion["user_id"],))
+        if user_row:
+            email = user_row[0]["email"]
+            discussion["user_display_name"] = email.split("@")[0] if "@" in email else email
+        else:
+            discussion["user_display_name"] = f"User {discussion['user_id']}"
+    
+    # Fetch comments
+    comment_rows = query(
+        """
+        SELECT 
+            c.comment_id,
+            c.user_id,
+            u.display_name AS user_display_name,
+            c.content,
+            c.created_at
+        FROM comments c
+        JOIN users u ON u.user_id = c.user_id
+        WHERE c.discussion_id = ?
+        ORDER BY c.created_at ASC
+        """,
+        (discussion_id,)
+    )
+    
+    comments = []
+    for row in comment_rows:
+        c = dict(row)
+        # Use email username as fallback for display_name
+        if not c.get("user_display_name"):
+            user_row = query("SELECT email FROM users WHERE user_id = ?", (c["user_id"],))
+            if user_row:
+                email = user_row[0]["email"]
+                c["user_display_name"] = email.split("@")[0] if "@" in email else email
+            else:
+                c["user_display_name"] = f"User {c['user_id']}"
+        comments.append(c)
+    
+    return jsonify({
+        "ok": True,
+        "discussion": discussion,
+        "comments": comments
+    })
+
+
+@app.post("/api/discussions/<int:discussion_id>/comments")
+def add_discussion_comment(discussion_id: int):
+    """
+    Add a comment to a discussion.
+    Requires authentication. Body: { "content": "string" }
+    """
+    user_id = _get_current_user_id()
+    if not user_id:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    # Check if discussion exists
+    discussion_check = query("SELECT discussion_id FROM discussions WHERE discussion_id = ?", (discussion_id,))
+    if not discussion_check:
+        return jsonify({"ok": False, "error": "Discussion not found"}), 404
+    
+    payload = request.get_json(silent=True) or {}
+    content = (payload.get("content") or "").strip()
+    
+    if not content:
+        return jsonify({"ok": False, "error": "Comment content is required"}), 400
+    
+    if len(content) > 5000:
+        return jsonify({"ok": False, "error": "Comment must be 5000 characters or less"}), 400
+    
+    try:
+        conn = get_db()
+        cursor = conn.execute(
+            """
+            INSERT INTO comments (discussion_id, user_id, content)
+            VALUES (?, ?, ?)
+            """,
+            (discussion_id, user_id, content)
+        )
+        conn.commit()
+        comment_id = cursor.lastrowid
+        
+        # Fetch the created comment
+        rows = query(
+            """
+            SELECT 
+                c.comment_id,
+                c.user_id,
+                u.display_name AS user_display_name,
+                c.content,
+                c.created_at
+            FROM comments c
+            JOIN users u ON u.user_id = c.user_id
+            WHERE c.comment_id = ?
+            """,
+            (comment_id,)
+        )
+        
+        if not rows:
+            return jsonify({"ok": False, "error": "Failed to retrieve created comment"}), 500
+        
+        comment = dict(rows[0])
+        # Use email username as fallback for display_name
+        if not comment.get("user_display_name"):
+            user_row = query("SELECT email FROM users WHERE user_id = ?", (user_id,))
+            if user_row:
+                email = user_row[0]["email"]
+                comment["user_display_name"] = email.split("@")[0] if "@" in email else email
+            else:
+                comment["user_display_name"] = f"User {user_id}"
+        
+        return jsonify({"ok": True, "comment": comment})
+    
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to add comment: {str(exc)}"}), 500
+
+
+@app.delete("/api/discussions/<int:discussion_id>")
+def delete_discussion(discussion_id: int):
+    """
+    Delete a discussion (owner only).
+    Requires authentication. Only the discussion creator can delete it.
+    Comments are cascade-deleted automatically via foreign key.
+    """
+    user_id = _get_current_user_id()
+    if not user_id:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    # Check if discussion exists and user is owner
+    discussion_rows = query(
+        "SELECT discussion_id, user_id FROM discussions WHERE discussion_id = ?",
+        (discussion_id,)
+    )
+    if not discussion_rows:
+        return jsonify({"ok": False, "error": "Discussion not found"}), 404
+    
+    discussion = dict(discussion_rows[0])
+    if discussion["user_id"] != user_id:
+        # Check if user is admin
+        user = _get_current_user()
+        if not user or not user.get("is_admin"):
+            return jsonify({"ok": False, "error": "You can only delete your own discussions"}), 403
+    
+    try:
+        execute("DELETE FROM discussions WHERE discussion_id = ?", (discussion_id,))
+        return jsonify({"ok": True, "deleted": discussion_id})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to delete discussion: {str(exc)}"}), 500
+
+
+@app.delete("/api/comments/<int:comment_id>")
+def delete_comment(comment_id: int):
+    """
+    Delete a comment (owner only).
+    Requires authentication. Only the comment creator can delete it.
+    """
+    user_id = _get_current_user_id()
+    if not user_id:
+        return jsonify({"ok": False, "error": "Authentication required"}), 401
+    
+    # Check if comment exists and user is owner
+    comment_rows = query(
+        "SELECT comment_id, user_id FROM comments WHERE comment_id = ?",
+        (comment_id,)
+    )
+    if not comment_rows:
+        return jsonify({"ok": False, "error": "Comment not found"}), 404
+    
+    comment = dict(comment_rows[0])
+    if comment["user_id"] != user_id:
+        # Check if user is admin
+        user = _get_current_user()
+        if not user or not user.get("is_admin"):
+            return jsonify({"ok": False, "error": "You can only delete your own comments"}), 403
+    
+    try:
+        execute("DELETE FROM comments WHERE comment_id = ?", (comment_id,))
+        return jsonify({"ok": True, "deleted": comment_id})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": f"Failed to delete comment: {str(exc)}"}), 500
+
+
 if __name__ == "__main__":
     app.run(debug=True)
 
