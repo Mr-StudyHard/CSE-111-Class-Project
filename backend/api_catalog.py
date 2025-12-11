@@ -4093,8 +4093,13 @@ def create_title_comment():
         )
         conn.commit()
         
+        comment_id = cur.lastrowid
+        if not comment_id:
+            conn.rollback()
+            return jsonify({"ok": False, "error": "Failed to create comment: no row ID returned"}), 500
+        
         # Fetch the created comment with user info
-        new_comment_row = query(
+        new_comment_rows = query(
             """
             SELECT c.comment_id, c.user_id, c.parent_comment_id, c.body, 
                    c.created_at, c.updated_at, c.is_deleted,
@@ -4103,8 +4108,14 @@ def create_title_comment():
             LEFT JOIN users u ON u.user_id = c.user_id
             WHERE c.comment_id = ?
             """,
-            (cur.lastrowid,)
-        )[0]
+            (comment_id,)
+        )
+        
+        if not new_comment_rows:
+            conn.rollback()
+            return jsonify({"ok": False, "error": "Failed to retrieve created comment"}), 500
+        
+        new_comment_row = new_comment_rows[0]
         
         comment = {
             "comment_id": new_comment_row["comment_id"],
@@ -4120,9 +4131,18 @@ def create_title_comment():
         }
         
         return jsonify({"ok": True, "comment": comment})
+    except sqlite3.OperationalError as exc:
+        conn.rollback()
+        error_msg = str(exc)
+        if "no such table" in error_msg.lower() or "title_comments" in error_msg.lower():
+            return jsonify({"ok": False, "error": "Database table 'title_comments' does not exist. Please run the migration script."}), 500
+        return jsonify({"ok": False, "error": f"Database error: {error_msg}"}), 500
     except Exception as exc:
         conn.rollback()
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        import traceback
+        error_msg = str(exc)
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": f"Server error: {error_msg}"}), 500
 
 
 @app.put("/api/discussion/comments/<int:comment_id>")
@@ -4643,6 +4663,545 @@ def serve_image(filename: str):
     except Exception as exc:
         import traceback
         return jsonify({"error": f"Error serving image: {str(exc)}", "trace": traceback.format_exc()}), 500
+
+
+# ============================================================================
+# Discussion Board System (MAL-style per movie/show discussions)
+# Uses the `discussions` and `comments` tables from schema.sql
+# ============================================================================
+
+
+def _get_current_user_id() -> int | None:
+    """
+    Get the current logged-in user's ID from the Authorization header.
+    Returns None if not authenticated.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        if ":" in token:
+            try:
+                user_id_str, email = token.split(":", 1)
+                user_id = int(user_id_str)
+                # Verify user exists
+                conn = get_db()
+                row = conn.execute(
+                    "SELECT user_id FROM users WHERE user_id = ? AND email = ?",
+                    (user_id, email)
+                ).fetchone()
+                if row:
+                    return user_id
+            except (ValueError, TypeError):
+                pass
+    return None
+
+
+def _require_auth() -> tuple[int, None] | tuple[None, tuple]:
+    """
+    Require authentication. Returns (user_id, None) if authenticated,
+    or (None, error_response) if not.
+    """
+    user_id = _get_current_user_id()
+    if not user_id:
+        return None, (jsonify({"ok": False, "error": "Authentication required"}), 401)
+    return user_id, None
+
+
+# --- List discussions for a movie ---
+@app.get("/api/movies/<int:movie_id>/discussions")
+def list_movie_discussions(movie_id: int):
+    """
+    List all discussions for a given movie.
+    Returns JSON array with discussion details and comment counts.
+    """
+    conn = get_db()
+    
+    # Verify movie exists
+    movie = conn.execute(
+        "SELECT movie_id FROM movies WHERE movie_id = ?",
+        (movie_id,)
+    ).fetchone()
+    if not movie:
+        return jsonify({"ok": False, "error": "Movie not found"}), 404
+    
+    # Fetch discussions with user info and comment count
+    rows = conn.execute(
+        """
+        SELECT 
+            d.discussion_id,
+            d.title,
+            d.user_id,
+            COALESCE(u.display_name, u.email) AS user_display_name,
+            d.created_at,
+            (SELECT COUNT(*) FROM comments c WHERE c.discussion_id = d.discussion_id) AS comment_count
+        FROM discussions d
+        LEFT JOIN users u ON u.user_id = d.user_id
+        WHERE d.movie_id = ?
+        ORDER BY d.created_at DESC
+        """,
+        (movie_id,)
+    ).fetchall()
+    
+    discussions = [
+        {
+            "discussion_id": row["discussion_id"],
+            "title": row["title"],
+            "user_id": row["user_id"],
+            "user_display_name": row["user_display_name"] or "Unknown",
+            "created_at": row["created_at"],
+            "comment_count": row["comment_count"]
+        }
+        for row in rows
+    ]
+    
+    return jsonify({"ok": True, "discussions": discussions})
+
+
+# --- List discussions for a show ---
+@app.get("/api/shows/<int:show_id>/discussions")
+def list_show_discussions(show_id: int):
+    """
+    List all discussions for a given TV show.
+    Returns JSON array with discussion details and comment counts.
+    """
+    conn = get_db()
+    
+    # Verify show exists
+    show = conn.execute(
+        "SELECT show_id FROM shows WHERE show_id = ?",
+        (show_id,)
+    ).fetchone()
+    if not show:
+        return jsonify({"ok": False, "error": "Show not found"}), 404
+    
+    # Fetch discussions with user info and comment count
+    rows = conn.execute(
+        """
+        SELECT 
+            d.discussion_id,
+            d.title,
+            d.user_id,
+            COALESCE(u.display_name, u.email) AS user_display_name,
+            d.created_at,
+            (SELECT COUNT(*) FROM comments c WHERE c.discussion_id = d.discussion_id) AS comment_count
+        FROM discussions d
+        LEFT JOIN users u ON u.user_id = d.user_id
+        WHERE d.show_id = ?
+        ORDER BY d.created_at DESC
+        """,
+        (show_id,)
+    ).fetchall()
+    
+    discussions = [
+        {
+            "discussion_id": row["discussion_id"],
+            "title": row["title"],
+            "user_id": row["user_id"],
+            "user_display_name": row["user_display_name"] or "Unknown",
+            "created_at": row["created_at"],
+            "comment_count": row["comment_count"]
+        }
+        for row in rows
+    ]
+    
+    return jsonify({"ok": True, "discussions": discussions})
+
+
+# --- Create discussion for a movie ---
+@app.post("/api/movies/<int:movie_id>/discussions")
+def create_movie_discussion(movie_id: int):
+    """
+    Create a new discussion for a movie.
+    Auth: Required
+    Body: { "title": "string" }
+    
+    The CHECK constraint in schema.sql enforces: movie_id IS NOT NULL XOR show_id IS NOT NULL
+    For movie discussions, we set movie_id and show_id = NULL.
+    """
+    user_id, error = _require_auth()
+    if error:
+        return error
+    
+    conn = get_db()
+    
+    # Verify movie exists
+    movie = conn.execute(
+        "SELECT movie_id FROM movies WHERE movie_id = ?",
+        (movie_id,)
+    ).fetchone()
+    if not movie:
+        return jsonify({"ok": False, "error": "Movie not found"}), 404
+    
+    payload = request.get_json(force=True, silent=True) or {}
+    title = (payload.get("title") or "").strip()
+    
+    if not title:
+        return jsonify({"ok": False, "error": "Discussion title is required"}), 400
+    
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO discussions (user_id, movie_id, show_id, title, created_at)
+            VALUES (?, ?, NULL, ?, CURRENT_TIMESTAMP)
+            """,
+            (user_id, movie_id, title)
+        )
+        conn.commit()
+        
+        discussion_id = cur.lastrowid
+        
+        # Fetch the created discussion
+        row = conn.execute(
+            """
+            SELECT 
+                d.discussion_id,
+                d.title,
+                d.user_id,
+                COALESCE(u.display_name, u.email) AS user_display_name,
+                d.created_at,
+                d.movie_id,
+                d.show_id
+            FROM discussions d
+            LEFT JOIN users u ON u.user_id = d.user_id
+            WHERE d.discussion_id = ?
+            """,
+            (discussion_id,)
+        ).fetchone()
+        
+        return jsonify({
+            "ok": True,
+            "discussion": {
+                "discussion_id": row["discussion_id"],
+                "title": row["title"],
+                "user_id": row["user_id"],
+                "user_display_name": row["user_display_name"] or "Unknown",
+                "created_at": row["created_at"],
+                "movie_id": row["movie_id"],
+                "show_id": row["show_id"],
+                "comment_count": 0
+            }
+        })
+    except sqlite3.Error as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": f"Database error: {str(exc)}"}), 500
+
+
+# --- Create discussion for a show ---
+@app.post("/api/shows/<int:show_id>/discussions")
+def create_show_discussion(show_id: int):
+    """
+    Create a new discussion for a TV show.
+    Auth: Required
+    Body: { "title": "string" }
+    
+    The CHECK constraint in schema.sql enforces: movie_id IS NOT NULL XOR show_id IS NOT NULL
+    For show discussions, we set show_id and movie_id = NULL.
+    """
+    user_id, error = _require_auth()
+    if error:
+        return error
+    
+    conn = get_db()
+    
+    # Verify show exists
+    show = conn.execute(
+        "SELECT show_id FROM shows WHERE show_id = ?",
+        (show_id,)
+    ).fetchone()
+    if not show:
+        return jsonify({"ok": False, "error": "Show not found"}), 404
+    
+    payload = request.get_json(force=True, silent=True) or {}
+    title = (payload.get("title") or "").strip()
+    
+    if not title:
+        return jsonify({"ok": False, "error": "Discussion title is required"}), 400
+    
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO discussions (user_id, movie_id, show_id, title, created_at)
+            VALUES (?, NULL, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (user_id, show_id, title)
+        )
+        conn.commit()
+        
+        discussion_id = cur.lastrowid
+        
+        # Fetch the created discussion
+        row = conn.execute(
+            """
+            SELECT 
+                d.discussion_id,
+                d.title,
+                d.user_id,
+                COALESCE(u.display_name, u.email) AS user_display_name,
+                d.created_at,
+                d.movie_id,
+                d.show_id
+            FROM discussions d
+            LEFT JOIN users u ON u.user_id = d.user_id
+            WHERE d.discussion_id = ?
+            """,
+            (discussion_id,)
+        ).fetchone()
+        
+        return jsonify({
+            "ok": True,
+            "discussion": {
+                "discussion_id": row["discussion_id"],
+                "title": row["title"],
+                "user_id": row["user_id"],
+                "user_display_name": row["user_display_name"] or "Unknown",
+                "created_at": row["created_at"],
+                "movie_id": row["movie_id"],
+                "show_id": row["show_id"],
+                "comment_count": 0
+            }
+        })
+    except sqlite3.Error as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": f"Database error: {str(exc)}"}), 500
+
+
+# --- Get a single discussion with its comments ---
+@app.get("/api/discussions/<int:discussion_id>")
+def get_discussion(discussion_id: int):
+    """
+    Get a single discussion with all its comments.
+    Returns discussion details and array of comments.
+    """
+    conn = get_db()
+    
+    # Fetch discussion with user info
+    discussion_row = conn.execute(
+        """
+        SELECT 
+            d.discussion_id,
+            d.title,
+            d.user_id,
+            COALESCE(u.display_name, u.email) AS user_display_name,
+            d.created_at,
+            d.movie_id,
+            d.show_id
+        FROM discussions d
+        LEFT JOIN users u ON u.user_id = d.user_id
+        WHERE d.discussion_id = ?
+        """,
+        (discussion_id,)
+    ).fetchone()
+    
+    if not discussion_row:
+        return jsonify({"ok": False, "error": "Discussion not found"}), 404
+    
+    # Fetch comments for this discussion
+    comment_rows = conn.execute(
+        """
+        SELECT 
+            c.comment_id,
+            c.user_id,
+            COALESCE(u.display_name, u.email) AS user_display_name,
+            c.content,
+            c.created_at
+        FROM comments c
+        LEFT JOIN users u ON u.user_id = c.user_id
+        WHERE c.discussion_id = ?
+        ORDER BY c.created_at ASC
+        """,
+        (discussion_id,)
+    ).fetchall()
+    
+    discussion = {
+        "discussion_id": discussion_row["discussion_id"],
+        "title": discussion_row["title"],
+        "user_id": discussion_row["user_id"],
+        "user_display_name": discussion_row["user_display_name"] or "Unknown",
+        "created_at": discussion_row["created_at"],
+        "movie_id": discussion_row["movie_id"],
+        "show_id": discussion_row["show_id"]
+    }
+    
+    comments = [
+        {
+            "comment_id": row["comment_id"],
+            "user_id": row["user_id"],
+            "user_display_name": row["user_display_name"] or "Unknown",
+            "content": row["content"],
+            "created_at": row["created_at"]
+        }
+        for row in comment_rows
+    ]
+    
+    return jsonify({
+        "ok": True,
+        "discussion": discussion,
+        "comments": comments
+    })
+
+
+# --- Add a comment to a discussion ---
+@app.post("/api/discussions/<int:discussion_id>/comments")
+def add_discussion_comment(discussion_id: int):
+    """
+    Add a comment to a discussion.
+    Auth: Required
+    Body: { "content": "string" }
+    """
+    user_id, error = _require_auth()
+    if error:
+        return error
+    
+    conn = get_db()
+    
+    # Verify discussion exists
+    discussion = conn.execute(
+        "SELECT discussion_id FROM discussions WHERE discussion_id = ?",
+        (discussion_id,)
+    ).fetchone()
+    if not discussion:
+        return jsonify({"ok": False, "error": "Discussion not found"}), 404
+    
+    payload = request.get_json(force=True, silent=True) or {}
+    content = (payload.get("content") or "").strip()
+    
+    if not content:
+        return jsonify({"ok": False, "error": "Comment content is required"}), 400
+    
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO comments (discussion_id, user_id, content, created_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (discussion_id, user_id, content)
+        )
+        conn.commit()
+        
+        comment_id = cur.lastrowid
+        
+        # Fetch the created comment with user info
+        row = conn.execute(
+            """
+            SELECT 
+                c.comment_id,
+                c.user_id,
+                COALESCE(u.display_name, u.email) AS user_display_name,
+                c.content,
+                c.created_at
+            FROM comments c
+            LEFT JOIN users u ON u.user_id = c.user_id
+            WHERE c.comment_id = ?
+            """,
+            (comment_id,)
+        ).fetchone()
+        
+        return jsonify({
+            "ok": True,
+            "comment": {
+                "comment_id": row["comment_id"],
+                "user_id": row["user_id"],
+                "user_display_name": row["user_display_name"] or "Unknown",
+                "content": row["content"],
+                "created_at": row["created_at"]
+            }
+        })
+    except sqlite3.Error as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": f"Database error: {str(exc)}"}), 500
+
+
+# --- Delete a discussion (owner or admin only) ---
+@app.delete("/api/discussions/<int:discussion_id>")
+def delete_discussion(discussion_id: int):
+    """
+    Delete a discussion. Only the owner can delete their discussion.
+    Auth: Required (owner only)
+    """
+    user_id, error = _require_auth()
+    if error:
+        return error
+    
+    conn = get_db()
+    
+    # Check if discussion exists and user owns it
+    discussion = conn.execute(
+        "SELECT discussion_id, user_id FROM discussions WHERE discussion_id = ?",
+        (discussion_id,)
+    ).fetchone()
+    
+    if not discussion:
+        return jsonify({"ok": False, "error": "Discussion not found"}), 404
+    
+    if discussion["user_id"] != user_id:
+        # Check if user is admin
+        user = conn.execute(
+            "SELECT email FROM users WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+        is_admin = user and user["email"] in ("admin@example.com", "admin@plotsignal.com")
+        
+        if not is_admin:
+            return jsonify({"ok": False, "error": "You can only delete your own discussions"}), 403
+    
+    try:
+        # Delete the discussion (CASCADE will delete comments)
+        conn.execute(
+            "DELETE FROM discussions WHERE discussion_id = ?",
+            (discussion_id,)
+        )
+        conn.commit()
+        
+        return jsonify({"ok": True, "message": "Discussion deleted"})
+    except sqlite3.Error as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": f"Database error: {str(exc)}"}), 500
+
+
+# --- Delete a comment (owner or admin only) ---
+@app.delete("/api/discussions/<int:discussion_id>/comments/<int:comment_id>")
+def delete_discussion_comment(discussion_id: int, comment_id: int):
+    """
+    Delete a comment from a discussion. Only the owner can delete their comment.
+    Auth: Required (owner only)
+    """
+    user_id, error = _require_auth()
+    if error:
+        return error
+    
+    conn = get_db()
+    
+    # Check if comment exists and belongs to this discussion
+    comment = conn.execute(
+        "SELECT comment_id, user_id FROM comments WHERE comment_id = ? AND discussion_id = ?",
+        (comment_id, discussion_id)
+    ).fetchone()
+    
+    if not comment:
+        return jsonify({"ok": False, "error": "Comment not found"}), 404
+    
+    if comment["user_id"] != user_id:
+        # Check if user is admin
+        user = conn.execute(
+            "SELECT email FROM users WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+        is_admin = user and user["email"] in ("admin@example.com", "admin@plotsignal.com")
+        
+        if not is_admin:
+            return jsonify({"ok": False, "error": "You can only delete your own comments"}), 403
+    
+    try:
+        conn.execute(
+            "DELETE FROM comments WHERE comment_id = ?",
+            (comment_id,)
+        )
+        conn.commit()
+        
+        return jsonify({"ok": True, "message": "Comment deleted"})
+    except sqlite3.Error as exc:
+        conn.rollback()
+        return jsonify({"ok": False, "error": f"Database error: {str(exc)}"}), 500
 
 
 if __name__ == "__main__":

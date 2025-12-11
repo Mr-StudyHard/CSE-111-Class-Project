@@ -945,3 +945,164 @@ export async function getGenreRatings(type: 'movie' | 'show' = 'movie') {
 		return { results: [] }
 	}
 }
+
+// ============================================================================
+// Discussion Board API Functions (MAL-style per movie/show discussions)
+// Uses the `discussions` and `comments` tables
+// ============================================================================
+
+export type Discussion = {
+	discussion_id: number
+	title: string
+	user_id: number
+	user_display_name: string
+	created_at: string
+	comment_count: number
+	movie_id?: number | null
+	show_id?: number | null
+}
+
+export type DiscussionComment = {
+	comment_id: number
+	user_id: number
+	user_display_name: string
+	content: string
+	created_at: string
+}
+
+export type DiscussionsResponse = {
+	ok: boolean
+	discussions: Discussion[]
+	error?: string
+}
+
+export type DiscussionDetailResponse = {
+	ok: boolean
+	discussion: Discussion
+	comments: DiscussionComment[]
+	error?: string
+}
+
+export type CreateDiscussionResponse = {
+	ok: boolean
+	discussion?: Discussion
+	error?: string
+}
+
+export type CreateCommentResponse = {
+	ok: boolean
+	comment?: DiscussionComment
+	error?: string
+}
+
+/**
+ * List all discussions for a movie
+ */
+export async function getMovieDiscussions(movieId: number) {
+	try {
+		const { data } = await api.get(`/movies/${movieId}/discussions`)
+		return data as DiscussionsResponse
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to fetch discussions'
+		return { ok: false, discussions: [], error: String(msg) }
+	}
+}
+
+/**
+ * List all discussions for a TV show
+ */
+export async function getShowDiscussions(showId: number) {
+	try {
+		const { data } = await api.get(`/shows/${showId}/discussions`)
+		return data as DiscussionsResponse
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to fetch discussions'
+		return { ok: false, discussions: [], error: String(msg) }
+	}
+}
+
+/**
+ * Create a new discussion for a movie
+ */
+export async function createMovieDiscussion(movieId: number, title: string) {
+	try {
+		const { data } = await api.post(`/movies/${movieId}/discussions`, { title })
+		return data as CreateDiscussionResponse
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to create discussion'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+/**
+ * Create a new discussion for a TV show
+ */
+export async function createShowDiscussion(showId: number, title: string) {
+	try {
+		const { data } = await api.post(`/shows/${showId}/discussions`, { title })
+		return data as CreateDiscussionResponse
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to create discussion'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+/**
+ * Get a single discussion with all its comments
+ */
+export async function getDiscussionDetail(discussionId: number) {
+	try {
+		const { data } = await api.get(`/discussions/${discussionId}`)
+		return data as DiscussionDetailResponse
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to fetch discussion'
+		return { ok: false, discussion: null as any, comments: [], error: String(msg) }
+	}
+}
+
+/**
+ * Add a comment to a discussion
+ */
+export async function addDiscussionComment(discussionId: number, content: string) {
+	try {
+		const { data } = await api.post(`/discussions/${discussionId}/comments`, { content })
+		return data as CreateCommentResponse
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to add comment'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+/**
+ * Delete a discussion (owner only)
+ */
+export async function deleteDiscussion(discussionId: number) {
+	try {
+		const { data } = await api.delete(`/discussions/${discussionId}`)
+		return data as { ok: boolean; message?: string; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to delete discussion'
+		return { ok: false, error: String(msg) }
+	}
+}
+
+/**
+ * Delete a comment from a discussion (owner only)
+ */
+export async function deleteDiscussionComment(discussionId: number, commentId: number) {
+	try {
+		const { data } = await api.delete(`/discussions/${discussionId}/comments/${commentId}`)
+		return data as { ok: boolean; message?: string; error?: string }
+	} catch (err: any) {
+		const errorData = err?.response?.data
+		const msg = errorData?.error || err?.message || 'Failed to delete comment'
+		return { ok: false, error: String(msg) }
+	}
+}

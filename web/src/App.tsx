@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import './App.css'
-import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getFutureReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, updateReview, deleteReview, type Review, getUserByEmail, setAuthToken, clearAuthToken, getUserSettings, updateUserSettings, type UserSettings, getUserProfile, type UserProfile, deleteUserAccount, addToWatchlist, removeFromWatchlist, addToFavorites, removeFromFavorites, checkFavorite, getTopRatedMovies, getTopRatedShows, getGenreDistribution, type TopRatedItem, type GenreDistribution, getPopularWatchlists, getUnreviewedTitles, getActiveReviewers, getGenreRatings, type PopularWatchlistItem, type UnreviewedItem, type ActiveReviewer, type GenreRating, getPublicUserProfile, type PublicUserProfile, addReviewReaction, getReviewReactions, getTitleComments, createTitleComment, updateTitleComment, deleteTitleComment, type Comment } from './api'
+import { getSummary, getList, refresh, search, type MediaItem, getUsers, type UserRow, getHealth, login, signup, getTrending, type TrendingItem, getNewReleases, getFutureReleases, getMovieDetail, getShowDetail, type MovieDetail, type ShowDetail, getGenres, getLanguages, createMedia, uploadImage, deleteMedia, copyMedia, updateMedia, type UpdateMediaPayload, getReviews, createReview, updateReview, deleteReview, type Review, getUserByEmail, setAuthToken, clearAuthToken, getUserSettings, updateUserSettings, type UserSettings, getUserProfile, type UserProfile, deleteUserAccount, addToWatchlist, removeFromWatchlist, addToFavorites, removeFromFavorites, checkFavorite, getTopRatedMovies, getTopRatedShows, getGenreDistribution, type TopRatedItem, type GenreDistribution, getPopularWatchlists, getUnreviewedTitles, getActiveReviewers, getGenreRatings, type PopularWatchlistItem, type UnreviewedItem, type ActiveReviewer, type GenreRating, getPublicUserProfile, type PublicUserProfile, addReviewReaction, getReviewReactions, getMovieDiscussions, getShowDiscussions, createMovieDiscussion, createShowDiscussion, getDiscussionDetail, addDiscussionComment, deleteDiscussion, deleteDiscussionComment, type Discussion, type DiscussionComment } from './api'
 type TrendingPeriod = 'weekly' | 'monthly' | 'all'
 type ReleaseFilter = 'all' | 'movie' | 'tv'
 
@@ -108,303 +108,6 @@ function Stat({label, value, hint}:{label:string;value:React.ReactNode;hint?:Rea
       <div className="stat-value">{value}</div>
       <div className="stat-label">{label}</div>
       {hint ? <div className="stat-hint">{hint}</div> : null}
-    </div>
-  )
-}
-
-function CommentItem({
-  comment,
-  currentUser,
-  replyingToCommentId,
-  replyText,
-  setReplyingToCommentId,
-  setReplyText,
-  editingCommentId,
-  editCommentText,
-  setEditingCommentId,
-  setEditCommentText,
-  commentSubmitting,
-  setCommentSubmitting,
-  onCommentAction,
-  detailData,
-  onUserProfileClick
-}: {
-  comment: Comment
-  currentUser: {user:string;email:string;user_id?:number;display_name?:string;is_admin?:boolean} | null
-  replyingToCommentId: number | null
-  replyText: string
-  setReplyingToCommentId: (id: number | null) => void
-  setReplyText: (text: string) => void
-  editingCommentId: number | null
-  editCommentText: string
-  setEditingCommentId: (id: number | null) => void
-  setEditCommentText: (text: string) => void
-  commentSubmitting: boolean
-  setCommentSubmitting: (submitting: boolean) => void
-  onCommentAction: () => Promise<void>
-  detailData: MovieDetail | ShowDetail | null
-  onUserProfileClick: (userId: number) => void
-}) {
-  const isEditing = editingCommentId === comment.comment_id
-  const isReplying = replyingToCommentId === comment.comment_id
-  const canEdit = currentUser && (comment.user_id === currentUser.user_id || currentUser.is_admin)
-  const canDelete = currentUser && (comment.user_id === currentUser.user_id || currentUser.is_admin)
-  const isDeleted = comment.is_deleted
-
-  return (
-    <div className="comment-item" style={{ marginBottom: '20px' }}>
-      {isEditing ? (
-        <div className="review-edit-form">
-          <textarea
-            value={editCommentText}
-            onChange={(e) => setEditCommentText(e.target.value)}
-            className="review-input-textarea"
-            rows={3}
-            style={{ marginTop: '8px' }}
-          />
-          <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-            <button
-              type="button"
-              className="review-submit-button"
-              onClick={async () => {
-                if(!editCommentText.trim()) {
-                  alert('Comment cannot be empty')
-                  return
-                }
-                setCommentSubmitting(true)
-                try {
-                  const result = await updateTitleComment(comment.comment_id, editCommentText.trim())
-                  if(result.ok) {
-                    setEditingCommentId(null)
-                    setEditCommentText('')
-                    await onCommentAction()
-                  } else {
-                    alert(`Failed to update comment: ${result.error}`)
-                  }
-                } catch (err: any) {
-                  alert(`Error updating comment: ${err?.message || 'Unknown error'}`)
-                } finally {
-                  setCommentSubmitting(false)
-                }
-              }}
-              disabled={commentSubmitting || !editCommentText.trim()}
-            >
-              {commentSubmitting ? 'Saving...' : 'Save'}
-            </button>
-            <button
-              type="button"
-              className="review-submit-button"
-              onClick={() => {
-                setEditingCommentId(null)
-                setEditCommentText('')
-              }}
-              disabled={commentSubmitting}
-              style={{ backgroundColor: 'var(--muted)', opacity: 0.7 }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="review-content" style={{ 
-            opacity: isDeleted ? 0.6 : 1,
-            fontStyle: isDeleted ? 'italic' : 'normal'
-          }}>
-            {comment.body}
-          </div>
-          <div className="review-meta">
-            <button
-              type="button"
-              className="review-author-link"
-              onClick={() => comment.user_id && onUserProfileClick(comment.user_id)}
-              title="View profile"
-            >
-              {comment.display_name || comment.user_email.split('@')[0]}
-            </button>
-            {comment.created_at && (
-              <span className="review-date">
-                {new Date(comment.created_at).toLocaleDateString()}
-                {comment.updated_at && comment.updated_at !== comment.created_at && (
-                  <span style={{ marginLeft: '8px', opacity: 0.7 }}>(edited)</span>
-                )}
-              </span>
-            )}
-            {canEdit && !isDeleted && (
-              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingCommentId(comment.comment_id)
-                    setEditCommentText(comment.body)
-                  }}
-                  style={{ 
-                    fontSize: '12px', 
-                    padding: '4px 12px', 
-                    backgroundColor: 'transparent',
-                    border: '1px solid var(--accent)',
-                    color: 'var(--accent)',
-                    borderRadius: '4px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Edit
-                </button>
-                {canDelete && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if(!confirm('Are you sure you want to delete this comment?')) return
-                      setCommentSubmitting(true)
-                      try {
-                        const result = await deleteTitleComment(comment.comment_id)
-                        if(result.ok) {
-                          await onCommentAction()
-                        } else {
-                          alert(`Failed to delete comment: ${result.error}`)
-                        }
-                      } catch (err: any) {
-                        alert(`Error deleting comment: ${err?.message || 'Unknown error'}`)
-                      } finally {
-                        setCommentSubmitting(false)
-                      }
-                    }}
-                    disabled={commentSubmitting}
-                    style={{ 
-                      fontSize: '12px', 
-                      padding: '4px 12px', 
-                      backgroundColor: 'transparent',
-                      border: '1px solid #ff4444',
-                      color: '#ff4444',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Delete
-                  </button>
-                )}
-              </div>
-            )}
-            {currentUser && !isDeleted && (
-              <button
-                type="button"
-                onClick={() => {
-                  if(isReplying) {
-                    setReplyingToCommentId(null)
-                    setReplyText('')
-                  } else {
-                    setReplyingToCommentId(comment.comment_id)
-                    setReplyText('')
-                  }
-                }}
-                style={{ 
-                  fontSize: '12px', 
-                  padding: '4px 12px', 
-                  backgroundColor: 'transparent',
-                  border: '1px solid var(--accent)',
-                  color: 'var(--accent)',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  marginTop: '8px'
-                }}
-              >
-                {isReplying ? 'Cancel Reply' : 'Reply'}
-              </button>
-            )}
-          </div>
-          {isReplying && currentUser && (
-            <div className="review-input-section" style={{ marginTop: '12px', marginLeft: '20px' }}>
-              <textarea
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                className="review-input-textarea"
-                placeholder="Write a reply..."
-                rows={2}
-              />
-              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                <button
-                  type="button"
-                  className="review-submit-button"
-                  onClick={async () => {
-                    if(!replyText.trim()) {
-                      alert('Please enter a reply before submitting.')
-                      return
-                    }
-                    if(!currentUser || !detailData) return
-                    
-                    setCommentSubmitting(true)
-                    try {
-                      const mediaType = detailData.media_type
-                      const targetType = mediaType === 'movie' ? 'movie' : 'show'
-                      const id = mediaType === 'movie' 
-                        ? (detailData as MovieDetail).movie_id 
-                        : (detailData as ShowDetail).show_id
-                      
-                      const result = await createTitleComment(
-                        targetType,
-                        id,
-                        replyText.trim(),
-                        comment.comment_id
-                      )
-                      
-                      if(result.ok) {
-                        setReplyText('')
-                        setReplyingToCommentId(null)
-                        await onCommentAction()
-                      } else {
-                        alert(`Failed to submit reply: ${result.error}`)
-                      }
-                    } catch (err: any) {
-                      alert(`Error submitting reply: ${err?.message || 'Unknown error'}`)
-                    } finally {
-                      setCommentSubmitting(false)
-                    }
-                  }}
-                  disabled={commentSubmitting || !replyText.trim()}
-                >
-                  {commentSubmitting ? 'Submitting...' : 'Post Reply'}
-                </button>
-                <button
-                  type="button"
-                  className="review-submit-button"
-                  onClick={() => {
-                    setReplyingToCommentId(null)
-                    setReplyText('')
-                  }}
-                  disabled={commentSubmitting}
-                  style={{ backgroundColor: 'var(--muted)', opacity: 0.7 }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-          {comment.replies && comment.replies.length > 0 && (
-            <div style={{ marginLeft: '30px', marginTop: '12px' }}>
-              {comment.replies.map((reply) => (
-                <CommentItem
-                  key={reply.comment_id}
-                  comment={reply}
-                  currentUser={currentUser}
-                  replyingToCommentId={replyingToCommentId}
-                  replyText={replyText}
-                  setReplyingToCommentId={setReplyingToCommentId}
-                  setReplyText={setReplyText}
-                  editingCommentId={editingCommentId}
-                  editCommentText={editCommentText}
-                  setEditingCommentId={setEditingCommentId}
-                  setEditCommentText={setEditCommentText}
-                  commentSubmitting={commentSubmitting}
-                  setCommentSubmitting={setCommentSubmitting}
-                  onCommentAction={onCommentAction}
-                  detailData={detailData}
-                  onUserProfileClick={onUserProfileClick}
-                />
-              ))}
-            </div>
-          )}
-        </>
-      )}
     </div>
   )
 }
@@ -573,15 +276,18 @@ export default function App() {
   const [favoriteLoading, setFavoriteLoading] = useState(false)
   const [detailDeleting, setDetailDeleting] = useState(false)
   const [userReactions, setUserReactions] = useState<Record<number, string[]>>({}) // review_id -> emote_types[]
-  // Discussion board state
-  const [comments, setComments] = useState<Comment[]>([])
-  const [commentsLoading, setCommentsLoading] = useState(false)
-  const [commentText, setCommentText] = useState('')
-  const [replyingToCommentId, setReplyingToCommentId] = useState<number | null>(null)
-  const [replyText, setReplyText] = useState('')
-  const [editingCommentId, setEditingCommentId] = useState<number | null>(null)
-  const [editCommentText, setEditCommentText] = useState('')
-  const [commentSubmitting, setCommentSubmitting] = useState(false)
+  // Discussion Threads state (MAL-style, uses discussions + comments tables)
+  const [discussions, setDiscussions] = useState<Discussion[]>([])
+  const [discussionsLoading, setDiscussionsLoading] = useState(false)
+  const [newDiscussionTitle, setNewDiscussionTitle] = useState('')
+  const [creatingDiscussion, setCreatingDiscussion] = useState(false)
+  const [viewingDiscussionId, setViewingDiscussionId] = useState<number | null>(null)
+  const [viewingDiscussion, setViewingDiscussion] = useState<Discussion | null>(null)
+  const [discussionComments, setDiscussionComments] = useState<DiscussionComment[]>([])
+  const [discussionCommentsLoading, setDiscussionCommentsLoading] = useState(false)
+  const [newDiscussionComment, setNewDiscussionComment] = useState('')
+  const [addingDiscussionComment, setAddingDiscussionComment] = useState(false)
+  
   // Cast carousel state
   const CAST_PAGE_SIZE = 6
   const [castPage, setCastPage] = useState(0)
@@ -2276,12 +1982,15 @@ export default function App() {
               setUserReactions(reactionsMap)
               setReviewsLoading(false)
             }
-            // Load comments
-            setCommentsLoading(true)
-            const commentsData = await getTitleComments('movie', numericId)
+            // Load discussions
+            setDiscussionsLoading(true)
+            setViewingDiscussionId(null)
+            setViewingDiscussion(null)
+            setDiscussionComments([])
+            const discussionsData = await getMovieDiscussions(numericId)
             if(requestId === detailRequestId.current){
-              setComments(commentsData.comments || [])
-              setCommentsLoading(false)
+              setDiscussions(discussionsData.discussions || [])
+              setDiscussionsLoading(false)
             }
           }
         } else {
@@ -2319,12 +2028,15 @@ export default function App() {
               setUserReactions(reactionsMap)
               setReviewsLoading(false)
             }
-            // Load comments
-            setCommentsLoading(true)
-            const commentsData = await getTitleComments('show', numericId)
+            // Load discussions
+            setDiscussionsLoading(true)
+            setViewingDiscussionId(null)
+            setViewingDiscussion(null)
+            setDiscussionComments([])
+            const discussionsData = await getShowDiscussions(numericId)
             if(requestId === detailRequestId.current){
-              setComments(commentsData.comments || [])
-              setCommentsLoading(false)
+              setDiscussions(discussionsData.discussions || [])
+              setDiscussionsLoading(false)
             }
           }
         }
@@ -6176,10 +5888,7 @@ export default function App() {
 
                   {/* Reviews Section */}
                   <div className="detail-reviews-section">
-                    <h3 className="section-title">Reviews</h3>
-                    <div className="review-count-display">
-                      There are {reviews.length} review{reviews.length !== 1 ? 's' : ''}
-                    </div>
+                    <h3 className="section-title" style={{ marginBottom: '20px' }}>Reviews</h3>
                     
                     {/* Display Reviews */}
                     {reviewsLoading ? (
@@ -6496,9 +6205,9 @@ export default function App() {
                     {/* Review Input */}
                     {currentUser && (
                       <div className="review-input-section">
-                        <div style={{ marginBottom: '8px' }}>
-                          <label htmlFor="review-rating" style={{ fontSize: '14px', color: 'var(--text)', marginRight: '8px' }}>
-                            Rating (optional, 0-10):
+                        <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                          <label htmlFor="review-rating" style={{ fontSize: '15px', color: 'var(--text)', fontWeight: 500 }}>
+                            Rating (optional):
                           </label>
                           <input
                             type="number"
@@ -6530,30 +6239,58 @@ export default function App() {
                             min="0"
                             max="10"
                             step="0.1"
-                            placeholder="e.g., 8.5 or 9"
+                            placeholder="e.g., 8.5"
                             style={{ 
-                              padding: '6px 12px', 
-                              borderRadius: '6px',
-                              backgroundColor: 'var(--bg)',
+                              padding: '10px 16px', 
+                              borderRadius: '10px',
+                              backgroundColor: 'rgba(11, 11, 15, 0.6)',
                               color: 'var(--text)',
-                              border: '1px solid var(--border)',
-                              fontSize: '14px',
-                              width: '120px'
+                              border: '2px solid rgba(255, 255, 255, 0.1)',
+                              fontSize: '14.5px',
+                              width: '140px',
+                              transition: 'all 0.3s ease',
+                              fontWeight: 500
+                            }}
+                            onFocus={(e) => {
+                              e.target.style.borderColor = 'rgba(37, 99, 235, 0.7)'
+                              e.target.style.boxShadow = '0 0 0 4px rgba(37, 99, 235, 0.15)'
+                              e.target.style.backgroundColor = 'rgba(11, 11, 15, 0.9)'
+                            }}
+                            onBlurCapture={(e) => {
+                              e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)'
+                              e.target.style.boxShadow = 'none'
+                              e.target.style.backgroundColor = 'rgba(11, 11, 15, 0.6)'
                             }}
                           />
                           {reviewRating !== undefined && (
-                            <span style={{ marginLeft: '8px', fontSize: '14px', color: 'var(--accent)', fontWeight: 600 }}>
+                            <span style={{ 
+                              fontSize: '16px', 
+                              color: 'var(--accent)', 
+                              fontWeight: 700,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '6px 14px',
+                              background: 'linear-gradient(135deg, rgba(229, 9, 20, 0.15), rgba(141, 8, 12, 0.1))',
+                              borderRadius: '8px',
+                              border: '1px solid rgba(229, 9, 20, 0.3)'
+                            }}>
                               ⭐ {reviewRating % 1 === 0 ? reviewRating : reviewRating.toFixed(1)}/10
                             </span>
                           )}
                         </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <label style={{ fontSize: '15px', color: 'var(--text)', fontWeight: 500 }}>
+                            Your Review
+                          </label>
                         <textarea
                           value={reviewText}
                           onChange={(e) => setReviewText(e.target.value)}
                           className="review-input-textarea"
-                          placeholder="Enter Your Review Here"
-                          rows={3}
+                            placeholder="Share your thoughts about this title..."
+                            rows={4}
                         />
+                        </div>
                         <button
                           type="button"
                           className="review-submit-button"
@@ -6653,109 +6390,332 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Discussion Board Section */}
+                  {/* Discussion Board Section (MAL-style threaded discussions) */}
                   <div className="detail-reviews-section" style={{ marginTop: '40px' }}>
-                    <h3 className="section-title">Discussion Board</h3>
-                    <div className="review-count-display">
-                      {comments.length} comment{comments.length !== 1 ? 's' : ''}
-                    </div>
+                    <h3 className="section-title" style={{ marginBottom: '20px' }}>Discussions</h3>
                     
-                    {/* Display Comments */}
-                    {commentsLoading ? (
-                      <div className="reviews-loading">Loading comments...</div>
-                    ) : comments.length > 0 ? (
-                      <div className="comments-list">
-                        {comments.map((comment) => (
-                          <CommentItem
-                            key={comment.comment_id}
-                            comment={comment}
-                            currentUser={currentUser}
-                            replyingToCommentId={replyingToCommentId}
-                            replyText={replyText}
-                            setReplyingToCommentId={setReplyingToCommentId}
-                            setReplyText={setReplyText}
-                            editingCommentId={editingCommentId}
-                            editCommentText={editCommentText}
-                            setEditingCommentId={setEditingCommentId}
-                            setEditCommentText={setEditCommentText}
-                            commentSubmitting={commentSubmitting}
-                            setCommentSubmitting={setCommentSubmitting}
-                            onCommentAction={async () => {
-                              if(!detailData) return
+                    {viewingDiscussionId && viewingDiscussion ? (
+                      // Viewing a single discussion thread
+                      <div className="discussion-thread-view">
+                        <button
+                          type="button"
+                          className="review-submit-button"
+                          onClick={() => {
+                            setViewingDiscussionId(null)
+                            setViewingDiscussion(null)
+                            setDiscussionComments([])
+                          }}
+                          style={{ marginBottom: '16px', backgroundColor: 'var(--muted)', opacity: 0.8 }}
+                        >
+                          ← Back to Threads
+                        </button>
+                        
+                        <div style={{ 
+                          padding: '16px', 
+                          backgroundColor: 'var(--surface)', 
+                          borderRadius: '8px', 
+                          marginBottom: '16px',
+                          border: '1px solid var(--border)'
+                        }}>
+                          <h4 style={{ margin: 0, marginBottom: '8px', fontSize: '18px', fontWeight: 600, color: 'var(--text)' }}>
+                            {viewingDiscussion.title}
+                          </h4>
+                          <div style={{ fontSize: '13px', color: 'var(--muted)' }}>
+                            Started by <span style={{ color: 'var(--accent)', fontWeight: 500 }}>{viewingDiscussion.user_display_name}</span>
+                            {' • '}
+                            {new Date(viewingDiscussion.created_at).toLocaleDateString()}
+                            {currentUser && (viewingDiscussion.user_id === currentUser.user_id || currentUser.is_admin) && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if(!confirm('Delete this discussion and all its comments?')) return
+                                  const result = await deleteDiscussion(viewingDiscussion.discussion_id)
+                                  if(result.ok) {
+                                    setViewingDiscussionId(null)
+                                    setViewingDiscussion(null)
+                                    setDiscussionComments([])
+                                    // Reload discussions
+                                    if(detailData) {
                               const mediaType = detailData.media_type
-                              const targetType = mediaType === 'movie' ? 'movie' : 'show'
                               const id = mediaType === 'movie' 
                                 ? (detailData as MovieDetail).movie_id 
                                 : (detailData as ShowDetail).show_id
-                              const commentsData = await getTitleComments(targetType, id)
-                              setComments(commentsData.comments || [])
-                            }}
-                            detailData={detailData}
-                            onUserProfileClick={openUserProfile}
-                          />
+                                      const discussionsData = mediaType === 'movie'
+                                        ? await getMovieDiscussions(id)
+                                        : await getShowDiscussions(id)
+                                      setDiscussions(discussionsData.discussions || [])
+                                    }
+                                  } else {
+                                    alert(`Failed to delete: ${result.error}`)
+                                  }
+                                }}
+                                style={{ 
+                                  marginLeft: '12px', 
+                                  color: '#ef4444', 
+                                  background: 'none', 
+                                  border: 'none', 
+                                  cursor: 'pointer',
+                                  fontSize: '12px'
+                                }}
+                              >
+                                Delete Thread
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        
+                        {/* Comments in thread */}
+                        {discussionCommentsLoading ? (
+                          <div className="reviews-loading">Loading comments...</div>
+                        ) : discussionComments.length > 0 ? (
+                          <div className="reviews-list">
+                            {discussionComments.map((c) => (
+                              <div key={c.comment_id} className="review-item" style={{ position: 'relative' }}>
+                                <div className="review-content">{c.content}</div>
+                                <div className="review-meta">
+                                  <span style={{ color: 'var(--accent)', fontWeight: 500 }}>{c.user_display_name}</span>
+                                  <span className="review-date">
+                                    {new Date(c.created_at).toLocaleDateString()}
+                                  </span>
+                                  {currentUser && (c.user_id === currentUser.user_id || currentUser.is_admin) && (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        if(!confirm('Delete this comment?')) return
+                                        const result = await deleteDiscussionComment(viewingDiscussion.discussion_id, c.comment_id)
+                                        if(result.ok) {
+                                          // Reload comments
+                                          const detail = await getDiscussionDetail(viewingDiscussion.discussion_id)
+                                          if(detail.ok) {
+                                            setDiscussionComments(detail.comments || [])
+                                          }
+                                        } else {
+                                          alert(`Failed to delete: ${result.error}`)
+                                        }
+                                      }}
+                                      style={{ 
+                                        marginLeft: '12px', 
+                                        color: '#ef4444', 
+                                        background: 'none', 
+                                        border: 'none', 
+                                        cursor: 'pointer',
+                                        fontSize: '12px'
+                                      }}
+                                    >
+                                      Delete
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
                         ))}
                       </div>
                     ) : (
-                      <div className="reviews-empty">No comments yet. Be the first to comment!</div>
+                          <div className="reviews-empty">No comments yet. Be the first to reply!</div>
                     )}
                     
-                    {/* Comment Input */}
+                        {/* Add comment form */}
                     {currentUser ? (
-                      <div className="review-input-section">
-                        <textarea
-                          value={commentText}
-                          onChange={(e) => setCommentText(e.target.value)}
-                          className="review-input-textarea"
-                          placeholder="Add a comment..."
-                          rows={3}
-                        />
+                          <div className="review-input-section" style={{ marginTop: '16px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <label style={{ fontSize: '15px', color: 'var(--text)', fontWeight: 500 }}>
+                                Add Your Reply
+                              </label>
+                              <textarea
+                                value={newDiscussionComment}
+                                onChange={(e) => setNewDiscussionComment(e.target.value)}
+                                className="review-input-textarea"
+                                placeholder="Share your thoughts on this discussion..."
+                                rows={3}
+                              />
+                            </div>
                         <button
                           type="button"
                           className="review-submit-button"
                           onClick={async () => {
-                            if(!commentText.trim()) {
-                              alert('Please enter a comment before submitting.')
+                                if(!newDiscussionComment.trim()) {
+                                  alert('Please enter a comment.')
                               return
                             }
-                            if(!currentUser || !detailData) return
-                            
-                            setCommentSubmitting(true)
+                                setAddingDiscussionComment(true)
+                                try {
+                                  const result = await addDiscussionComment(viewingDiscussion.discussion_id, newDiscussionComment.trim())
+                                  if(result.ok) {
+                                    setNewDiscussionComment('')
+                                    // Reload comments
+                                    const detail = await getDiscussionDetail(viewingDiscussion.discussion_id)
+                                    if(detail.ok) {
+                                      setDiscussionComments(detail.comments || [])
+                                    }
+                                  } else {
+                                    alert(`Failed to add comment: ${result.error}`)
+                                  }
+                                } catch (err: any) {
+                                  alert(`Error: ${err?.message || 'Unknown error'}`)
+                                } finally {
+                                  setAddingDiscussionComment(false)
+                                }
+                              }}
+                              disabled={addingDiscussionComment || !newDiscussionComment.trim()}
+                            >
+                              {addingDiscussionComment ? 'Posting...' : 'Post Reply'}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="reviews-empty" style={{ padding: '20px', textAlign: 'center' }}>
+                            Please log in to reply to this discussion.
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      // Listing all discussions
+                      <>
+                        {/* Create new discussion form */}
+                        {currentUser && (
+                          <div className="review-input-section" style={{ marginBottom: '20px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                              <label style={{ fontSize: '15px', color: 'var(--text)', fontWeight: 500 }}>
+                                Start a New Discussion
+                              </label>
+                            <input
+                              type="text"
+                              value={newDiscussionTitle}
+                              onChange={(e) => setNewDiscussionTitle(e.target.value)}
+                                placeholder="What's on your mind about this title?"
+                              style={{
+                                width: '100%',
+                                  padding: '14px 18px',
+                                  borderRadius: '12px',
+                                  backgroundColor: 'rgba(11, 11, 15, 0.6)',
+                                color: 'var(--text)',
+                                  border: '2px solid rgba(255, 255, 255, 0.1)',
+                                  fontSize: '14.5px',
+                                  transition: 'all 0.3s ease',
+                                  fontWeight: 400
+                                }}
+                                onFocus={(e) => {
+                                  e.target.style.borderColor = 'rgba(37, 99, 235, 0.7)'
+                                  e.target.style.boxShadow = '0 0 0 4px rgba(37, 99, 235, 0.15), 0 4px 12px rgba(37, 99, 235, 0.2)'
+                                  e.target.style.backgroundColor = 'rgba(11, 11, 15, 0.9)'
+                                  e.target.style.transform = 'translateY(-1px)'
+                                }}
+                                onBlur={(e) => {
+                                  e.target.style.borderColor = 'rgba(255, 255, 255, 0.1)'
+                                  e.target.style.boxShadow = 'none'
+                                  e.target.style.backgroundColor = 'rgba(11, 11, 15, 0.6)'
+                                  e.target.style.transform = 'translateY(0)'
+                                }}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              className="review-submit-button"
+                              onClick={async () => {
+                                if(!newDiscussionTitle.trim()) {
+                                  alert('Please enter a discussion title.')
+                                  return
+                                }
+                                if(!detailData) return
+                                
+                                setCreatingDiscussion(true)
                             try {
                               const mediaType = detailData.media_type
-                              const targetType = mediaType === 'movie' ? 'movie' : 'show'
                               const id = mediaType === 'movie' 
                                 ? (detailData as MovieDetail).movie_id 
                                 : (detailData as ShowDetail).show_id
                               
-                              const result = await createTitleComment(
-                                targetType,
-                                id,
-                                commentText.trim()
-                              )
+                                  const result = mediaType === 'movie'
+                                    ? await createMovieDiscussion(id, newDiscussionTitle.trim())
+                                    : await createShowDiscussion(id, newDiscussionTitle.trim())
                               
                               if(result.ok) {
-                                setCommentText('')
-                                // Reload comments
-                                const commentsData = await getTitleComments(targetType, id)
-                                setComments(commentsData.comments || [])
+                                    setNewDiscussionTitle('')
+                                    // Reload discussions
+                                    const discussionsData = mediaType === 'movie'
+                                      ? await getMovieDiscussions(id)
+                                      : await getShowDiscussions(id)
+                                    setDiscussions(discussionsData.discussions || [])
                               } else {
-                                alert(`Failed to submit comment: ${result.error}`)
+                                    alert(`Failed to create discussion: ${result.error}`)
                               }
                             } catch (err: any) {
-                              alert(`Error submitting comment: ${err?.message || 'Unknown error'}`)
+                                  alert(`Error: ${err?.message || 'Unknown error'}`)
                             } finally {
-                              setCommentSubmitting(false)
+                                  setCreatingDiscussion(false)
                             }
                           }}
-                          disabled={commentSubmitting || !commentText.trim()}
+                              disabled={creatingDiscussion || !newDiscussionTitle.trim()}
                         >
-                          {commentSubmitting ? 'Submitting...' : 'Post Comment'}
+                              {creatingDiscussion ? 'Creating...' : 'Create Thread'}
                         </button>
                       </div>
-                    ) : (
-                      <div className="reviews-empty" style={{ padding: '20px', textAlign: 'center' }}>
-                        Please log in to participate in the discussion.
+                        )}
+                        
+                        {/* Discussions list */}
+                        {discussionsLoading ? (
+                          <div className="reviews-loading">Loading discussions...</div>
+                        ) : discussions.length > 0 ? (
+                          <div className="reviews-list">
+                            {discussions.map((d) => (
+                              <button
+                                key={d.discussion_id}
+                                type="button"
+                                onClick={async () => {
+                                  setViewingDiscussionId(d.discussion_id)
+                                  setViewingDiscussion(d)
+                                  setDiscussionCommentsLoading(true)
+                                  try {
+                                    const detail = await getDiscussionDetail(d.discussion_id)
+                                    if(detail.ok) {
+                                      setDiscussionComments(detail.comments || [])
+                                    }
+                                  } catch (err) {
+                                    console.error('Failed to load discussion', err)
+                                  } finally {
+                                    setDiscussionCommentsLoading(false)
+                                  }
+                                }}
+                                style={{
+                                  display: 'block',
+                                  width: '100%',
+                                  padding: '16px',
+                                  backgroundColor: 'var(--surface)',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: '8px',
+                                  marginBottom: '12px',
+                                  textAlign: 'left',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease'
+                                }}
+                                className="discussion-thread-item"
+                              >
+                                <div style={{ 
+                                  fontSize: '15px', 
+                                  fontWeight: 600, 
+                                  color: 'var(--text)',
+                                  marginBottom: '6px'
+                                }}>
+                                  {d.title}
+                                </div>
+                                <div style={{ 
+                                  fontSize: '13px', 
+                                  color: 'var(--muted)',
+                                  display: 'flex',
+                                  gap: '12px',
+                                  flexWrap: 'wrap'
+                                }}>
+                                  <span>by <span style={{ color: 'var(--accent)' }}>{d.user_display_name}</span></span>
+                                  <span>{new Date(d.created_at).toLocaleDateString()}</span>
+                                  <span style={{ color: 'var(--accent)' }}>{d.comment_count} {d.comment_count === 1 ? 'reply' : 'replies'}</span>
+                                </div>
+                              </button>
+                            ))}
                       </div>
+                    ) : (
+                          <div className="reviews-empty">
+                            No discussion threads yet. {currentUser ? 'Be the first to start one!' : 'Log in to start a discussion.'}
+                      </div>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>

@@ -5168,53 +5168,96 @@ button:focus {
   margin-bottom: 30px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  padding: 24px;
+  background: linear-gradient(135deg, rgba(20, 20, 26, 0.95), rgba(11, 11, 15, 0.95));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 .review-input-textarea {
   width: 100%;
-  padding: 14px 18px;
-  background: rgba(11, 11, 15, 0.8);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 16px 20px;
+  background: rgba(11, 11, 15, 0.6);
+  border: 2px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   color: var(--text);
-  font-size: 14px;
+  font-size: 14.5px;
   font-family: inherit;
   resize: vertical;
-  min-height: 80px;
-  transition: all 0.2s ease;
+  min-height: 100px;
+  transition: all 0.3s ease;
+  line-height: 1.6;
+}
+
+.review-input-textarea::placeholder {
+  color: rgba(154, 160, 166, 0.6);
+  font-style: italic;
+}
+
+.review-input-textarea:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(11, 11, 15, 0.8);
 }
 
 .review-input-textarea:focus {
   outline: none;
-  border-color: rgba(37, 99, 235, 0.6);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  border-color: rgba(37, 99, 235, 0.7);
+  background: rgba(11, 11, 15, 0.9);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.15), 0 4px 12px rgba(37, 99, 235, 0.2);
+  transform: translateY(-1px);
 }
 
 .review-submit-button {
   align-self: flex-start;
-  padding: 10px 24px;
+  padding: 12px 32px;
   border-radius: 999px;
-  border: 1px solid rgba(229, 9, 20, 0.45);
-  background: linear-gradient(135deg, rgba(229, 9, 20, 0.18), rgba(141, 8, 12, 0.14));
+  border: 2px solid rgba(229, 9, 20, 0.5);
+  background: linear-gradient(135deg, rgba(229, 9, 20, 0.2), rgba(141, 8, 12, 0.16));
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   cursor: pointer;
-  transition: all 0.25s ease;
-  box-shadow: 0 4px 12px rgba(229, 9, 20, 0.16);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 12px rgba(229, 9, 20, 0.2);
+  position: relative;
+  overflow: hidden;
+}
+
+.review-submit-button::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  transform: translate(-50%, -50%);
+  transition: width 0.6s, height 0.6s;
+}
+
+.review-submit-button:hover::before {
+  width: 300px;
+  height: 300px;
 }
 
 .review-submit-button:hover:not(:disabled) {
-  border-color: rgba(229, 9, 20, 0.75);
-  background: linear-gradient(135deg, rgba(229, 9, 20, 0.28), rgba(141, 8, 12, 0.22));
-  box-shadow: 0 8px 18px rgba(229, 9, 20, 0.26);
-  transform: translateY(-1px);
+  border-color: rgba(229, 9, 20, 0.85);
+  background: linear-gradient(135deg, rgba(229, 9, 20, 0.35), rgba(141, 8, 12, 0.28));
+  box-shadow: 0 8px 24px rgba(229, 9, 20, 0.35), 0 0 40px rgba(229, 9, 20, 0.15);
+  transform: translateY(-2px);
+}
+
+.review-submit-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 4px 12px rgba(229, 9, 20, 0.25);
 }
 
 .review-submit-button:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
@@ -5604,6 +5647,35 @@ button:focus {
   
   .user-profile-section {
     padding: 16px 20px;
+  }
+}
+
+/* ============================================================================
+   MAL-style Discussion Threads
+   ============================================================================ */
+
+.discussion-thread-item {
+  background: rgba(17, 17, 23, 0.6) !important;
+}
+
+.discussion-thread-item:hover {
+  background: rgba(17, 17, 23, 0.9) !important;
+  border-color: var(--accent) !important;
+  transform: translateY(-1px);
+}
+
+.discussion-thread-view {
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
